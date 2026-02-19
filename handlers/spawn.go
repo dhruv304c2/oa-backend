@@ -2,9 +2,17 @@ package handlers
 
 import (
 	"agent/agent"
-	"fmt"
+	"encoding/json"
 	"net/http"
 )
+
+type SpawnRequest struct {
+	SystemPrompt string `json:"system_prompt"`
+}
+
+type SpawnResponse struct {
+	AgentID string `json:"agent_id"`
+}
 
 func SpawnAgentHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -12,8 +20,15 @@ func SpawnAgentHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	agentID := agent.SpawnAgent("HI!")
+	var req SpawnRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+
+	agentID := agent.SpawnAgent(req.SystemPrompt)
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, `{"agent_id":"%s"}`, agentID)
+	json.NewEncoder(w).Encode(SpawnResponse{AgentID: agentID})
 }
