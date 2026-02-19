@@ -14,13 +14,15 @@ var (
 	mu            sync.Mutex
 )
 
-func SpawnAgent() string {
+func SpawnAgent(systemPrompt string) string {
 	rand.Seed(time.Now().UnixNano())
 	agentID := fmt.Sprintf("agent-%d", rand.Intn(1000000))
 
 	agent := &Agent{
 		ID:      agentID,
-		History: []*genai.Content{},
+		History: []*genai.Content{
+			genai.NewContentFromText(systemPrompt, genai.RoleUser),
+		},
 	}
 
 	mu.Lock()

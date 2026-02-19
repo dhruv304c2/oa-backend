@@ -12,7 +12,7 @@ func SpawnAgentHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	agentID := agent.SpawnAgent()
+	agentID := agent.SpawnAgent("HI!")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintf(w, `{"agent_id":"%s"}`, agentID)
