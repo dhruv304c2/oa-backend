@@ -35,18 +35,22 @@ func HistoryHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req HistoryRequest
+	var includeFull bool
 
 	if r.Method == http.MethodGet {
 		// Parse query parameters
 		req.AgentID = r.URL.Query().Get("agent_id")
 		req.Limit, _ = strconv.Atoi(r.URL.Query().Get("limit"))
 		req.Offset, _ = strconv.Atoi(r.URL.Query().Get("offset"))
+		includeFull = r.URL.Query().Get("include_full") == "true"
 	} else {
 		// Parse JSON body
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Bad request", http.StatusBadRequest)
 			return
 		}
+		// For POST requests, default to client version only
+		includeFull = false
 	}
 
 	// Set defaults
@@ -70,9 +74,26 @@ func HistoryHandler(w http.ResponseWriter, r *http.Request) {
 	// Convert to response format
 	var historyMessages []HistoryMessage
 	for _, msg := range messages {
+		content := msg.ClientContent
+
+		// Use full content if requested
+		if includeFull {
+			content = msg.Content
+		}
+
+		// Handle backward compatibility - if ClientContent is empty, extract it from Content
+		if content == "" && !includeFull {
+			content = extractClientContent(msg.Content, msg.Role)
+		}
+
+		// Skip messages with no content (e.g., hidden system prompts)
+		if content == "" {
+			continue
+		}
+
 		historyMessages = append(historyMessages, HistoryMessage{
 			Role:      msg.Role,
-			Content:   msg.Content,
+			Content:   content,
 			Timestamp: msg.Timestamp,
 		})
 	}

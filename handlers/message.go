@@ -222,12 +222,15 @@ func MessageHandler(w http.ResponseWriter, r *http.Request) {
 		len(agentObj.History), len(userMessage))
 	agentObj.History = append(agentObj.History, genai.NewContentFromText(userMessage, genai.RoleUser))
 
-	// Save user message asynchronously
-	go func(agentID, content string, index int) {
+	// Save user message asynchronously with both versions
+	go func(agentID, fullContent string, index int) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		if err := db.SaveConversationMessage(ctx, agentID, content, "user", index); err != nil {
+		// Extract clean version for client
+		clientContent := extractClientContent(fullContent, "user")
+
+		if err := db.SaveConversationMessageWithVersions(ctx, agentID, fullContent, clientContent, "user", index); err != nil {
 			log.Printf("Failed to persist user message: %v", err)
 		}
 	}(req.AgentID, userMessage, len(agentObj.History)-1)
@@ -352,15 +355,16 @@ func MessageHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	agentObj.History = append(agentObj.History, genai.NewContentFromText(aiResponse.Reply, genai.RoleModel))
 
-	// Save AI response asynchronously
-	go func(agentID, content string, index int) {
+	// Save AI response asynchronously with both versions
+	go func(agentID, processedContent, naturalContent string, index int) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		if err := db.SaveConversationMessage(ctx, agentID, content, "model", index); err != nil {
+		// For AI responses, natural response is the full content, processed is the client content
+		if err := db.SaveConversationMessageWithVersions(ctx, agentID, naturalContent, processedContent, "model", index); err != nil {
 			log.Printf("Failed to persist AI response: %v", err)
 		}
-	}(req.AgentID, aiResponse.Reply, len(agentObj.History)-1)
+	}(req.AgentID, aiResponse.Reply, naturalResponse, len(agentObj.History)-1)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(aiResponse)

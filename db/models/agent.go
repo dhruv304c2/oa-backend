@@ -21,10 +21,11 @@ type AgentDocument struct {
 }
 
 type ConversationDocument struct {
-	ID        primitive.ObjectID `bson:"_id,omitempty"`
-	AgentID   primitive.ObjectID `bson:"agent_id"`
-	Role      string             `bson:"role"`      // "user" or "model"
-	Content   string             `bson:"content"`
-	Timestamp time.Time          `bson:"timestamp"`
-	Index     int                `bson:"index"`     // Position in conversation
+	ID            primitive.ObjectID `bson:"_id,omitempty"`
+	AgentID       primitive.ObjectID `bson:"agent_id"`
+	Role          string             `bson:"role"`            // "user" or "model"
+	Content       string             `bson:"content"`         // Full version for agent continuity
+	ClientContent string             `bson:"client_content"`  // Clean version for API responses
+	Timestamp     time.Time          `bson:"timestamp"`
+	Index         int                `bson:"index"`           // Position in conversation
 }

@@ -27,10 +27,16 @@ func CreateAgent(ctx context.Context, agent *models.AgentDocument) (primitive.Ob
 	return result.InsertedID.(primitive.ObjectID), nil
 }
 
-// SaveConversationMessage saves a single message asynchronously
+// SaveConversationMessage saves a single message - wrapper for backward compatibility
 func SaveConversationMessage(ctx context.Context, agentID string, content string, role string, index int) error {
+	// For backward compatibility, use same content for both versions
+	return SaveConversationMessageWithVersions(ctx, agentID, content, content, role, index)
+}
+
+// SaveConversationMessageWithVersions saves a message with both full and client versions
+func SaveConversationMessageWithVersions(ctx context.Context, agentID string, fullContent string, clientContent string, role string, index int) error {
 	// Skip empty messages - they cause Gemini API errors
-	if strings.TrimSpace(content) == "" {
+	if strings.TrimSpace(fullContent) == "" && strings.TrimSpace(clientContent) == "" {
 		log.Printf("[SAVE_MESSAGE_SKIP] Skipping empty message for agent %s at index %d", agentID, index)
 		return nil
 	}
@@ -41,11 +47,12 @@ func SaveConversationMessage(ctx context.Context, agentID string, content string
 	}
 
 	doc := models.ConversationDocument{
-		AgentID:   objID,
-		Role:      role,
-		Content:   content,
-		Timestamp: time.Now(),
-		Index:     index,
+		AgentID:       objID,
+		Role:          role,
+		Content:       fullContent,
+		ClientContent: clientContent,
+		Timestamp:     time.Now(),
+		Index:         index,
 	}
 
 	collection := GetCollection("conversations")
