@@ -4,6 +4,7 @@ import (
 	"agent/db/models"
 	"context"
 	"log"
+	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -28,6 +29,12 @@ func CreateAgent(ctx context.Context, agent *models.AgentDocument) (primitive.Ob
 
 // SaveConversationMessage saves a single message asynchronously
 func SaveConversationMessage(ctx context.Context, agentID string, content string, role string, index int) error {
+	// Skip empty messages - they cause Gemini API errors
+	if strings.TrimSpace(content) == "" {
+		log.Printf("[SAVE_MESSAGE_SKIP] Skipping empty message for agent %s at index %d", agentID, index)
+		return nil
+	}
+
 	objID, err := primitive.ObjectIDFromHex(agentID)
 	if err != nil {
 		return err

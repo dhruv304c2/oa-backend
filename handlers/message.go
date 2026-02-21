@@ -44,9 +44,19 @@ func MessageHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Printf("[MESSAGE_REQUEST] Received request for agent %s", req.AgentID)
 	agentObj, ok := agent.GetAgentByID(req.AgentID)
 	if !ok {
+		log.Printf("[MESSAGE_ERROR] Agent %s not found in memory or database", req.AgentID)
 		http.Error(w, "Agent not found", http.StatusNotFound)
+		return
+	}
+	log.Printf("[MESSAGE_AGENT_FOUND] Agent %s (%s) retrieved successfully", agentObj.CharacterName, req.AgentID)
+
+	// Validate agent has required fields after loading from DB
+	if agentObj.StoryID == "" {
+		log.Printf("[MESSAGE_ERROR] Agent %s has empty StoryID", agentObj.CharacterName)
+		http.Error(w, "Agent configuration invalid", http.StatusInternalServerError)
 		return
 	}
 
@@ -55,6 +65,8 @@ func MessageHandler(w http.ResponseWriter, r *http.Request) {
 	if req.LocationID != "" {
 		locationDetails, err := fetchLocationDetails(agentObj.StoryID, req.LocationID)
 		if err != nil {
+			log.Printf("[MESSAGE_ERROR] Failed to fetch location details for agent %s, location %s: %v",
+				agentObj.CharacterName, req.LocationID, err)
 			http.Error(w, "Failed to fetch location details", http.StatusInternalServerError)
 			return
 		}
@@ -69,6 +81,8 @@ func MessageHandler(w http.ResponseWriter, r *http.Request) {
 	if len(req.PresentedEvidence) > 0 {
 		evidenceDetails, err := fetchEvidenceDetails(agentObj.StoryID, req.PresentedEvidence)
 		if err != nil {
+			log.Printf("[MESSAGE_ERROR] Failed to fetch evidence details for agent %s, evidence IDs %v: %v",
+				agentObj.CharacterName, req.PresentedEvidence, err)
 			http.Error(w, "Failed to fetch evidence details", http.StatusInternalServerError)
 			return
 		}
@@ -86,7 +100,15 @@ func MessageHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Add user message to history
+	// Add user message to history (validate it's not empty)
+	if strings.TrimSpace(userMessage) == "" {
+		log.Printf("[MESSAGE_ERROR] Received empty user message")
+		http.Error(w, "Message cannot be empty", http.StatusBadRequest)
+		return
+	}
+
+	log.Printf("[MESSAGE_DEBUG] Adding user message to history. Current history length: %d, Message length: %d",
+		len(agentObj.History), len(userMessage))
 	agentObj.History = append(agentObj.History, genai.NewContentFromText(userMessage, genai.RoleUser))
 
 	// Save user message asynchronously
@@ -105,6 +127,7 @@ func MessageHandler(w http.ResponseWriter, r *http.Request) {
 		APIKey: os.Getenv("GEMINI_API_KEY"),
 	})
 	if err != nil {
+		log.Printf("[MESSAGE_ERROR] Failed to create Gemini client for agent %s: %v", agentObj.CharacterName, err)
 		http.Error(w, "Failed to create client", http.StatusInternalServerError)
 		return
 	}
@@ -113,11 +136,35 @@ func MessageHandler(w http.ResponseWriter, r *http.Request) {
 		ResponseMIMEType: "application/json",
 	}
 
-	resp, err := client.Models.GenerateContent(ctx, "gemini-2.5-flash", agentObj.History, genConfig)
+	// Ensure we don't have any nil entries in history
+	validHistory := make([]*genai.Content, 0, len(agentObj.History))
+	for i, content := range agentObj.History {
+		if content != nil {
+			validHistory = append(validHistory, content)
+		} else {
+			log.Printf("[MESSAGE_WARNING] Found nil content at index %d", i)
+		}
+	}
+
+	log.Printf("[MESSAGE_DEBUG] Calling Gemini for agent %s with history length: %d",
+		agentObj.CharacterName, len(validHistory))
+	resp, err := client.Models.GenerateContent(ctx, "gemini-2.5-flash", validHistory, genConfig)
 	if err != nil {
+		log.Printf("[MESSAGE_ERROR] Failed to get Gemini response for agent %s: %v", agentObj.CharacterName, err)
+		log.Printf("[MESSAGE_DEBUG] Valid history length: %d (original: %d)", len(validHistory), len(agentObj.History))
+		// Log history entries for debugging, especially around the error index
+		for i := range validHistory {
+			// Log more entries, especially around index 14 where the error occurred
+			if i < 3 || (i >= 13 && i <= 15) {
+				log.Printf("[MESSAGE_DEBUG] ValidHistory[%d]: Content exists", i)
+			}
+		}
 		http.Error(w, "Failed to get response", http.StatusInternalServerError)
 		return
 	}
+
+	// Update agentObj.History to use the validated history
+	agentObj.History = validHistory
 
 	// Parse the JSON response
 	aiResponse, err := parseAIResponse(resp.Text())
@@ -139,28 +186,49 @@ func MessageHandler(w http.ResponseWriter, r *http.Request) {
 			err = collection.FindOne(ctx, bson.M{"_id": storyObjID}).Decode(&story)
 
 			if err == nil {
-				// Extract ALL mentions from the dialogue
-				mentions, err := extractMentionsFromDialogue(aiResponse.Reply, &story)
+				// Verify dialogue against character's knowledge (only sends character-specific items)
+				log.Printf("[DIALOGUE_VERIFY] Starting verification for agent %s (%s)", agentObj.CharacterName, agentObj.ID)
+				unavailableItems, err := verifyDialogueAgainstCharacterKnowledge(
+					aiResponse.Reply,
+					agentObj,
+					&story)
 				if err != nil {
-					fmt.Printf("Warning: Failed to extract mentions: %v\n", err)
+					log.Printf("[DIALOGUE_VERIFY_FAIL] Agent %s - Failed to verify dialogue: %v", agentObj.CharacterName, err)
+					// Continue without modification if verification fails
 				} else {
-					// Find unavailable items
-					unavailableLocations := findUnavailableLocations(mentions.Locations, agentObj.KnowsLocationIDs)
-					unavailableEvidence := findUnavailableEvidence(mentions.Evidence, agentObj.HoldsEvidenceIDs)
+					// Log what was found
+					if len(unavailableItems.Locations) > 0 || len(unavailableItems.Evidence) > 0 {
+						log.Printf("[DIALOGUE_VERIFY_FOUND] Agent %s - Found unavailable items: %d locations, %d evidence",
+							agentObj.CharacterName, len(unavailableItems.Locations), len(unavailableItems.Evidence))
 
-					// Modify dialogue if needed
-					if len(unavailableLocations) > 0 || len(unavailableEvidence) > 0 {
+						// Log details of unavailable items
+						for _, loc := range unavailableItems.Locations {
+							log.Printf("[DIALOGUE_VERIFY_DETAIL] Agent %s - Unavailable location: %s (ID: %s)",
+								agentObj.CharacterName, loc.Name, loc.ID)
+						}
+						for _, ev := range unavailableItems.Evidence {
+							log.Printf("[DIALOGUE_VERIFY_DETAIL] Agent %s - Unavailable evidence: %s (ID: %s)",
+								agentObj.CharacterName, ev.Name, ev.ID)
+						}
+
+						// Modify dialogue
+						originalReply := aiResponse.Reply
 						modifiedReply, err := modifyDialogueForUnavailableItems(
 							aiResponse.Reply,
-							unavailableLocations,
-							unavailableEvidence,
+							unavailableItems.Locations,
+							unavailableItems.Evidence,
 							agentObj)
 
 						if err == nil {
 							aiResponse.Reply = modifiedReply
+							log.Printf("[DIALOGUE_MODIFY_SUCCESS] Agent %s - Successfully modified dialogue", agentObj.CharacterName)
+							log.Printf("[DIALOGUE_MODIFY_ORIGINAL] %s", originalReply)
+							log.Printf("[DIALOGUE_MODIFY_NEW] %s", modifiedReply)
 						} else {
-							fmt.Printf("Warning: Failed to modify dialogue: %v\n", err)
+							log.Printf("[DIALOGUE_MODIFY_FAIL] Agent %s - Failed to modify dialogue: %v", agentObj.CharacterName, err)
 						}
+					} else {
+						log.Printf("[DIALOGUE_VERIFY_CLEAN] Agent %s - No unavailable items found, dialogue is clean", agentObj.CharacterName)
 					}
 				}
 
@@ -179,7 +247,11 @@ func MessageHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Add the reply to history
+	// Add the reply to history (ensure it's not empty)
+	if strings.TrimSpace(aiResponse.Reply) == "" {
+		log.Printf("[MESSAGE_WARNING] AI returned empty response, using default message")
+		aiResponse.Reply = "I apologize, but I couldn't formulate a proper response. Could you please rephrase your question?"
+	}
 	agentObj.History = append(agentObj.History, genai.NewContentFromText(aiResponse.Reply, genai.RoleModel))
 
 	// Save AI response asynchronously
@@ -294,6 +366,40 @@ func fetchLocationDetails(storyID string, locationID string) (*models.Location, 
 	return nil, nil
 }
 
+// fetchLocationDetailsForIDs retrieves multiple location details by their IDs
+func fetchLocationDetailsForIDs(storyID string, locationIDs []string) ([]models.Location, error) {
+	storyObjID, err := primitive.ObjectIDFromHex(storyID)
+	if err != nil {
+		return nil, err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var story models.Story
+	collection := db.GetCollection("stories")
+	err = collection.FindOne(ctx, bson.M{"_id": storyObjID}).Decode(&story)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create a map for quick lookup
+	locationMap := make(map[string]bool)
+	for _, id := range locationIDs {
+		locationMap[id] = true
+	}
+
+	// Filter locations by IDs
+	var locations []models.Location
+	for _, loc := range story.Story.Locations {
+		if locationMap[loc.ID] {
+			locations = append(locations, loc)
+		}
+	}
+
+	return locations, nil
+}
+
 // buildEvidenceNameMap creates a mapping from evidence names to IDs
 func buildEvidenceNameMap(story *models.Story) map[string]string {
 	nameToID := make(map[string]string)
@@ -325,55 +431,94 @@ func mapRevealedNamesToIDs(names []string, nameMap map[string]string) []string {
 	return ids
 }
 
-// extractMentionsFromDialogue finds all location/evidence mentions
-func extractMentionsFromDialogue(dialogue string, story *models.Story) (*ExtractedMentions, error) {
-	// Build complete lists of all locations and evidence in the story
-	allLocations := make(map[string]string) // name -> ID
-	for _, loc := range story.Story.Locations {
-		allLocations[strings.ToLower(loc.LocationName)] = loc.ID
+// formatCharacterEvidence formats evidence items for the verification prompt
+func formatCharacterEvidence(evidence []models.Evidence) string {
+	if len(evidence) == 0 {
+		return "No evidence items"
 	}
 
-	allEvidence := make(map[string]string) // name -> ID
-	for _, char := range story.Story.Characters {
-		for _, ev := range char.HoldsEvidence {
-			allEvidence[strings.ToLower(ev.Title)] = ev.ID
-		}
+	var formatted []string
+	for _, e := range evidence {
+		formatted = append(formatted, fmt.Sprintf("- %s: %s", e.Title, e.Description))
+	}
+	return strings.Join(formatted, "\n")
+}
+
+// formatCharacterLocations formats locations for the verification prompt
+func formatCharacterLocations(locations []models.Location) string {
+	if len(locations) == 0 {
+		return "No known locations"
 	}
 
-	// Use Gemini to extract mentions with context
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	var formatted []string
+	for _, l := range locations {
+		formatted = append(formatted, fmt.Sprintf("- %s: %s", l.LocationName, l.VisualDescription))
+	}
+	return strings.Join(formatted, "\n")
+}
 
-	extractPrompt := fmt.Sprintf(`Analyze this dialogue and find ALL mentions of specific locations or evidence items.
+// verifyDialogueAgainstCharacterKnowledge verifies dialogue mentions against character's actual knowledge
+func verifyDialogueAgainstCharacterKnowledge(dialogue string, agent *agent.Agent, story *models.Story) (*ExtractedMentions, error) {
+	// Log verification start
+	log.Printf("[VERIFY_START] Agent %s - Starting verification with %d known locations, %d held evidence",
+		agent.CharacterName, len(agent.KnowsLocationIDs), len(agent.HoldsEvidenceIDs))
 
-Dialogue: "%s"
+	// Fetch character's evidence details
+	characterEvidence, err := fetchEvidenceDetails(agent.StoryID, agent.HoldsEvidenceIDs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch evidence details: %w", err)
+	}
+	log.Printf("[VERIFY_DATA] Agent %s - Fetched %d evidence items", agent.CharacterName, len(characterEvidence))
 
-Known locations in the story: %v
-Known evidence items in the story: %v
+	// Fetch character's location details
+	characterLocations, err := fetchLocationDetailsForIDs(agent.StoryID, agent.KnowsLocationIDs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch location details: %w", err)
+	}
+	log.Printf("[VERIFY_DATA] Agent %s - Fetched %d location details", agent.CharacterName, len(characterLocations))
 
-For each mention found, provide:
-1. The exact name as it appears in the dialogue
-2. The surrounding context (10-15 words around the mention)
-3. Whether it's a location or evidence
+	// Build verification prompt with only character's items
+	verifyPrompt := fmt.Sprintf(`You are verifying dialogue consistency for a character.
+
+CHARACTER PROFILE:
+- Name: %s
+- Personality: %s
+
+EVIDENCE THIS CHARACTER POSSESSES:
+%s
+
+LOCATIONS THIS CHARACTER KNOWS:
+%s
+
+DIALOGUE TO VERIFY:
+"%s"
+
+TASK: Identify any evidence items or locations mentioned in the dialogue that are NOT in the character's possession/knowledge lists above.
+
+Important:
+- Only flag items explicitly mentioned or clearly referenced
+- Consider the character's personality when interpreting ambiguous references
+- Be precise about what was actually said
 
 Return JSON format:
 {
-  "locations": [
-    {"name": "location name", "context": "surrounding text with the mention"},
-    ...
+  "unavailable_evidence": [
+    {"name": "exact item name mentioned", "context": "the sentence where it was mentioned"}
   ],
-  "evidence": [
-    {"name": "evidence name", "context": "surrounding text with the mention"},
-    ...
+  "unavailable_locations": [
+    {"name": "exact location name mentioned", "context": "the sentence where it was mentioned"}
   ]
-}
+}`,
+		agent.CharacterName,
+		agent.Personality,
+		formatCharacterEvidence(characterEvidence),
+		formatCharacterLocations(characterLocations),
+		dialogue)
 
-Be thorough - include direct mentions, references, and descriptions.`,
-		dialogue,
-		getLocationNames(story),
-		getEvidenceNames(story))
+	// Create Gemini client with longer timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
 
-	// Create Gemini client
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
 		APIKey: os.Getenv("GEMINI_API_KEY"),
 	})
@@ -385,39 +530,58 @@ Be thorough - include direct mentions, references, and descriptions.`,
 		ResponseMIMEType: "application/json",
 	}
 
+	// Log prompt size for monitoring
+	promptLength := len(verifyPrompt)
+	log.Printf("[VERIFY_PROMPT] Agent %s - Sending verification prompt (length: %d chars)", agent.CharacterName, promptLength)
+
+	startTime := time.Now()
 	resp, err := client.Models.GenerateContent(ctx, "gemini-2.5-flash",
-		[]*genai.Content{genai.NewContentFromText(extractPrompt, genai.RoleUser)},
+		[]*genai.Content{genai.NewContentFromText(verifyPrompt, genai.RoleUser)},
 		genConfig)
 	if err != nil {
+		log.Printf("[VERIFY_API_FAIL] Agent %s - Gemini API error after %v: %v", agent.CharacterName, time.Since(startTime), err)
 		return nil, err
 	}
+
+	log.Printf("[VERIFY_API_SUCCESS] Agent %s - Gemini response received in %v", agent.CharacterName, time.Since(startTime))
 
 	// Parse the response
-	var tempExtracted struct {
-		Locations []struct {
+	var verifyResponse struct {
+		UnavailableEvidence []struct {
 			Name    string `json:"name"`
 			Context string `json:"context"`
-		} `json:"locations"`
-		Evidence []struct {
+		} `json:"unavailable_evidence"`
+		UnavailableLocations []struct {
 			Name    string `json:"name"`
 			Context string `json:"context"`
-		} `json:"evidence"`
+		} `json:"unavailable_locations"`
 	}
 
-	err = json.Unmarshal([]byte(resp.Text()), &tempExtracted)
+	responseText := resp.Text()
+	log.Printf("[VERIFY_RESPONSE_RAW] Agent %s - Raw response: %s", agent.CharacterName, responseText)
+
+	err = json.Unmarshal([]byte(responseText), &verifyResponse)
 	if err != nil {
+		log.Printf("[VERIFY_PARSE_FAIL] Agent %s - Failed to parse JSON response: %v", agent.CharacterName, err)
 		return nil, err
 	}
 
-	// Map names to IDs
+	log.Printf("[VERIFY_PARSE_SUCCESS] Agent %s - Found %d unavailable evidence, %d unavailable locations",
+		agent.CharacterName, len(verifyResponse.UnavailableEvidence), len(verifyResponse.UnavailableLocations))
+
+	// Convert to ExtractedMentions format with IDs
 	mentions := &ExtractedMentions{
 		Locations: []MentionedItem{},
 		Evidence:  []MentionedItem{},
 	}
 
-	// Process locations
-	for _, loc := range tempExtracted.Locations {
-		if id, exists := allLocations[strings.ToLower(strings.TrimSpace(loc.Name))]; exists {
+	// Build maps for name->ID lookup
+	locationNameMap := buildLocationNameMap(story)
+	evidenceNameMap := buildEvidenceNameMap(story)
+
+	// Process unavailable locations
+	for _, loc := range verifyResponse.UnavailableLocations {
+		if id, exists := locationNameMap[strings.ToLower(strings.TrimSpace(loc.Name))]; exists {
 			mentions.Locations = append(mentions.Locations, MentionedItem{
 				Name:    loc.Name,
 				ID:      id,
@@ -426,9 +590,9 @@ Be thorough - include direct mentions, references, and descriptions.`,
 		}
 	}
 
-	// Process evidence
-	for _, ev := range tempExtracted.Evidence {
-		if id, exists := allEvidence[strings.ToLower(strings.TrimSpace(ev.Name))]; exists {
+	// Process unavailable evidence
+	for _, ev := range verifyResponse.UnavailableEvidence {
+		if id, exists := evidenceNameMap[strings.ToLower(strings.TrimSpace(ev.Name))]; exists {
 			mentions.Evidence = append(mentions.Evidence, MentionedItem{
 				Name:    ev.Name,
 				ID:      id,
@@ -440,6 +604,10 @@ Be thorough - include direct mentions, references, and descriptions.`,
 	return mentions, nil
 }
 
+// OLD extractMentionsFromDialogue - Deprecated in favor of verifyDialogueAgainstCharacterKnowledge
+// This function was causing timeouts because it sent ALL story locations and evidence to Gemini.
+// The new verification approach only sends character-specific items, reducing prompt size by ~90%.
+
 // modifyDialogueForUnavailableItems adjusts dialogue to explain unavailable items
 func modifyDialogueForUnavailableItems(
 	originalDialogue string,
@@ -448,8 +616,12 @@ func modifyDialogueForUnavailableItems(
 	agent *agent.Agent) (string, error) {
 
 	if len(unavailableLocations) == 0 && len(unavailableEvidence) == 0 {
+		log.Printf("[MODIFY_SKIP] Agent %s - No items to modify", agent.CharacterName)
 		return originalDialogue, nil
 	}
+
+	log.Printf("[MODIFY_START] Agent %s - Modifying dialogue for %d locations, %d evidence",
+		agent.CharacterName, len(unavailableLocations), len(unavailableEvidence))
 
 	// Create modification prompt
 	modPrompt := fmt.Sprintf(`You are %s with personality: %s
@@ -485,66 +657,33 @@ Modified response:`,
 		APIKey: os.Getenv("GEMINI_API_KEY"),
 	})
 	if err != nil {
+		log.Printf("[MODIFY_CLIENT_FAIL] Agent %s - Failed to create Gemini client: %v", agent.CharacterName, err)
 		return originalDialogue, err
 	}
+
+	log.Printf("[MODIFY_API_CALL] Agent %s - Calling Gemini to rewrite dialogue", agent.CharacterName)
+	startTime := time.Now()
 
 	resp, err := client.Models.GenerateContent(ctx, "gemini-2.5-flash",
 		[]*genai.Content{genai.NewContentFromText(modPrompt, genai.RoleUser)},
 		nil)
 	if err != nil {
+		log.Printf("[MODIFY_API_FAIL] Agent %s - Failed to modify dialogue after %v: %v", agent.CharacterName, time.Since(startTime), err)
 		return originalDialogue, err
 	}
 
-	return resp.Text(), nil
+	modifiedDialogue := resp.Text()
+	log.Printf("[MODIFY_API_SUCCESS] Agent %s - Dialogue modified successfully in %v", agent.CharacterName, time.Since(startTime))
+	log.Printf("[MODIFY_LENGTH] Agent %s - Original: %d chars, Modified: %d chars",
+		agent.CharacterName, len(originalDialogue), len(modifiedDialogue))
+
+	return modifiedDialogue, nil
 }
 
-func getLocationNames(story *models.Story) []string {
-	var names []string
-	for _, loc := range story.Story.Locations {
-		names = append(names, loc.LocationName)
-	}
-	return names
-}
+// getLocationNames and getEvidenceNames removed - no longer needed with the new verification approach
 
-func getEvidenceNames(story *models.Story) []string {
-	var names []string
-	for _, char := range story.Story.Characters {
-		for _, ev := range char.HoldsEvidence {
-			names = append(names, ev.Title)
-		}
-	}
-	return names
-}
-
-func findUnavailableLocations(mentioned []MentionedItem, knownLocationIDs []string) []MentionedItem {
-	knownMap := make(map[string]bool)
-	for _, id := range knownLocationIDs {
-		knownMap[id] = true
-	}
-
-	var unavailable []MentionedItem
-	for _, item := range mentioned {
-		if !knownMap[item.ID] {
-			unavailable = append(unavailable, item)
-		}
-	}
-	return unavailable
-}
-
-func findUnavailableEvidence(mentioned []MentionedItem, heldEvidenceIDs []string) []MentionedItem {
-	heldMap := make(map[string]bool)
-	for _, id := range heldEvidenceIDs {
-		heldMap[id] = true
-	}
-
-	var unavailable []MentionedItem
-	for _, item := range mentioned {
-		if !heldMap[item.ID] {
-			unavailable = append(unavailable, item)
-		}
-	}
-	return unavailable
-}
+// findUnavailableLocations and findUnavailableEvidence are no longer needed
+// The new verifyDialogueAgainstCharacterKnowledge function directly returns unavailable items
 
 func formatUnavailableItems(items []MentionedItem) string {
 	if len(items) == 0 {

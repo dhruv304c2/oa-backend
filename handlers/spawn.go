@@ -110,6 +110,20 @@ func SpawnAgentHandler(w http.ResponseWriter, r *http.Request) {
 		req.StoryID, character.ID, character.Name, character.PersonalityProfile,
 		evidenceIDs, character.KnowsLocationIDs)
 
+	// Save the initial system prompt as the first conversation message
+	// This ensures the agent can be properly reconstructed after server restart
+	fullSystemPrompt := fmt.Sprintf("%s\n\n[STORY CONTEXT FOR REFERENCE]:\n%s", systemPrompt, story.Story.FullStory)
+	go func(agentID, content string) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if err := db.SaveConversationMessage(ctx, agentID, content, "model", 0); err != nil {
+			log.Printf("Failed to persist initial system prompt: %v", err)
+		} else {
+			log.Printf("[SPAWN_SUCCESS] Saved initial system prompt for agent %s", character.Name)
+		}
+	}(agentIDStr, fullSystemPrompt)
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(SpawnResponse{AgentID: agentIDStr})
