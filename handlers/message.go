@@ -98,7 +98,6 @@ func MessageHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Configure generation for JSON output
 	genConfig := &genai.GenerateContentConfig{
 		ResponseMIMEType: "application/json",
 	}
@@ -119,7 +118,6 @@ func MessageHandler(w http.ResponseWriter, r *http.Request) {
 			RevealedLocations: []string{},
 		}
 	} else {
-		// First, we need to fetch the story to build name mappings
 		storyObjID, err := primitive.ObjectIDFromHex(agentObj.StoryID)
 		if err == nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -130,25 +128,44 @@ func MessageHandler(w http.ResponseWriter, r *http.Request) {
 			err = collection.FindOne(ctx, bson.M{"_id": storyObjID}).Decode(&story)
 
 			if err == nil {
-				// Build name-to-ID mappings
+				// Extract ALL mentions from the dialogue
+				mentions, err := extractMentionsFromDialogue(aiResponse.Reply, &story)
+				if err != nil {
+					fmt.Printf("Warning: Failed to extract mentions: %v\n", err)
+				} else {
+					// Find unavailable items
+					unavailableLocations := findUnavailableLocations(mentions.Locations, agentObj.KnowsLocationIDs)
+					unavailableEvidence := findUnavailableEvidence(mentions.Evidence, agentObj.HoldsEvidenceIDs)
+
+					// Modify dialogue if needed
+					if len(unavailableLocations) > 0 || len(unavailableEvidence) > 0 {
+						modifiedReply, err := modifyDialogueForUnavailableItems(
+							aiResponse.Reply,
+							unavailableLocations,
+							unavailableEvidence,
+							agentObj)
+
+						if err == nil {
+							aiResponse.Reply = modifiedReply
+						} else {
+							fmt.Printf("Warning: Failed to modify dialogue: %v\n", err)
+						}
+					}
+				}
+
+				// Now handle the revealed items arrays
 				evidenceMap := buildEvidenceNameMap(&story)
 				locationMap := buildLocationNameMap(&story)
 
-				// Convert natural names to IDs
 				evidenceIDs := mapRevealedNamesToIDs(aiResponse.RevealedEvidences, evidenceMap)
 				locationIDs := mapRevealedNamesToIDs(aiResponse.RevealedLocations, locationMap)
 
-				// Validate and track using IDs internally
 				aiResponse.RevealedEvidences = validateRevealedItems(evidenceIDs, agentObj.HoldsEvidenceIDs)
 				aiResponse.RevealedLocations = validateRevealedItems(locationIDs, agentObj.KnowsLocationIDs)
 
-				// Update tracking
 				updateAgentTracking(agentObj, aiResponse.RevealedEvidences, aiResponse.RevealedLocations)
 			}
 		}
-
-		// Remove the verification system call (comment out line 122)
-		// aiResponse, err = verifyAndModifyResponse(aiResponse, agentObj, "")
 	}
 
 	// Add the reply to history
@@ -191,7 +208,6 @@ func updateAgentTracking(agent *agent.Agent, evidences []string, locations []str
 	}
 }
 
-// fetchEvidenceDetails queries the database for evidence details
 func fetchEvidenceDetails(storyID string, evidenceIDs []string) ([]models.Evidence, error) {
 	// Convert story ID string to ObjectID
 	storyObjID, err := primitive.ObjectIDFromHex(storyID)
@@ -229,7 +245,6 @@ func fetchEvidenceDetails(storyID string, evidenceIDs []string) ([]models.Eviden
 	return evidenceDetails, nil
 }
 
-// fetchLocationDetails queries the database for location details
 func fetchLocationDetails(storyID string, locationID string) (*models.Location, error) {
 	// Convert story ID string to ObjectID
 	storyObjID, err := primitive.ObjectIDFromHex(storyID)
@@ -263,7 +278,6 @@ func buildEvidenceNameMap(story *models.Story) map[string]string {
 	nameToID := make(map[string]string)
 	for _, char := range story.Story.Characters {
 		for _, ev := range char.HoldsEvidence {
-			// Use lowercase for case-insensitive matching
 			nameToID[strings.ToLower(ev.Title)] = ev.ID
 		}
 	}
@@ -274,7 +288,6 @@ func buildEvidenceNameMap(story *models.Story) map[string]string {
 func buildLocationNameMap(story *models.Story) map[string]string {
 	nameToID := make(map[string]string)
 	for _, loc := range story.Story.Locations {
-		// Use lowercase for case-insensitive matching
 		nameToID[strings.ToLower(loc.LocationName)] = loc.ID
 	}
 	return nameToID
@@ -291,188 +304,252 @@ func mapRevealedNamesToIDs(names []string, nameMap map[string]string) []string {
 	return ids
 }
 
-// ExtractedItems holds the extracted location and evidence mentions from a dialogue
-// type ExtractedItems struct {
-// 	Locations         []string `json:"locations"`
-// 	Evidence          []string `json:"evidence"`
-// 	AmbiguousMentions []string `json:"ambiguous_mentions,omitempty"`
-// }
+// extractMentionsFromDialogue finds all location/evidence mentions
+func extractMentionsFromDialogue(dialogue string, story *models.Story) (*ExtractedMentions, error) {
+	// Build complete lists of all locations and evidence in the story
+	allLocations := make(map[string]string) // name -> ID
+	for _, loc := range story.Story.Locations {
+		allLocations[strings.ToLower(loc.LocationName)] = loc.ID
+	}
 
-// extractMentionedItems uses LLM to extract all location/evidence mentions from dialogue
-// func extractMentionedItems(dialogue string, storyContext string, storyID string) (*ExtractedItems, error) {
-// 	// Fetch the story to get all available locations and evidence for reference
-// 	storyObjID, err := primitive.ObjectIDFromHex(storyID)
-// 	if err != nil {
-// 		return nil, err
-// 	}
+	allEvidence := make(map[string]string) // name -> ID
+	for _, char := range story.Story.Characters {
+		for _, ev := range char.HoldsEvidence {
+			allEvidence[strings.ToLower(ev.Title)] = ev.ID
+		}
+	}
 
-// 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-// 	defer cancel()
+	// Use Gemini to extract mentions with context
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-// 	var story models.Story
-// 	collection := db.GetCollection("stories")
-// 	err = collection.FindOne(ctx, bson.M{"_id": storyObjID}).Decode(&story)
-// 	if err != nil {
-// 		return nil, err
-// 	}
+	extractPrompt := fmt.Sprintf(`Analyze this dialogue and find ALL mentions of specific locations or evidence items.
 
-// 	// Build reference lists
-// 	var allLocationNames []string
-// 	for _, loc := range story.Story.Locations {
-// 		allLocationNames = append(allLocationNames, fmt.Sprintf("%s (ID: %s)", loc.LocationName, loc.ID))
-// 	}
+Dialogue: "%s"
 
-// 	var allEvidenceNames []string
-// 	for _, char := range story.Story.Characters {
-// 		for _, ev := range char.HoldsEvidence {
-// 			allEvidenceNames = append(allEvidenceNames, fmt.Sprintf("%s (ID: %s)", ev.Title, ev.ID))
-// 		}
-// 	}
+Known locations in the story: %v
+Known evidence items in the story: %v
 
-// 	// Construct extraction prompt
-// 	extractionPrompt := fmt.Sprintf(`Analyze this character dialogue and extract ALL mentions of locations and evidence.
+For each mention found, provide:
+1. The exact name as it appears in the dialogue
+2. The surrounding context (10-15 words around the mention)
+3. Whether it's a location or evidence
 
-// Dialogue: "%s"
+Return JSON format:
+{
+  "locations": [
+    {"name": "location name", "context": "surrounding text with the mention"},
+    ...
+  ],
+  "evidence": [
+    {"name": "evidence name", "context": "surrounding text with the mention"},
+    ...
+  ]
+}
 
-// Story context for reference:
-// - Known locations in story: %v
-// - Known evidence types in story: %v
+Be thorough - include direct mentions, references, and descriptions.`,
+		dialogue,
+		getLocationNames(story),
+		getEvidenceNames(story))
 
-// Extract any mention of:
-// - Physical locations (buildings, rooms, areas)
-// - Evidence items (objects, documents, clues)
-// - References to places or items, even indirect
+	// Create Gemini client
+	client, err := genai.NewClient(ctx, &genai.ClientConfig{
+		APIKey: os.Getenv("GEMINI_API_KEY"),
+	})
+	if err != nil {
+		return nil, err
+	}
 
-// Return JSON:
-// {
-//   "locations": ["location_id1", "location_id2"],
-//   "evidence": ["evidence_id1", "evidence_id2"],
-//   "ambiguous_mentions": ["description of unclear references"]
-// }
+	genConfig := &genai.GenerateContentConfig{
+		ResponseMIMEType: "application/json",
+	}
 
-// IMPORTANT: Only include IDs if the dialogue clearly mentions that specific location or evidence.`,
-// 		dialogue,
-// 		allLocationNames,
-// 		allEvidenceNames)
+	resp, err := client.Models.GenerateContent(ctx, "gemini-2.5-flash",
+		[]*genai.Content{genai.NewContentFromText(extractPrompt, genai.RoleUser)},
+		genConfig)
+	if err != nil {
+		return nil, err
+	}
 
-// 	// Create Gemini client
-// 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
-// 		APIKey: os.Getenv("GEMINI_API_KEY"),
-// 	})
-// 	if err != nil {
-// 		return nil, err
-// 	}
+	// Parse the response
+	var tempExtracted struct {
+		Locations []struct {
+			Name    string `json:"name"`
+			Context string `json:"context"`
+		} `json:"locations"`
+		Evidence []struct {
+			Name    string `json:"name"`
+			Context string `json:"context"`
+		} `json:"evidence"`
+	}
 
-// 	// Configure for JSON output
-// 	genConfig := &genai.GenerateContentConfig{
-// 		ResponseMIMEType: "application/json",
-// 	}
+	err = json.Unmarshal([]byte(resp.Text()), &tempExtracted)
+	if err != nil {
+		return nil, err
+	}
 
-// 	resp, err := client.Models.GenerateContent(ctx, "gemini-2.5-flash",
-// 		[]*genai.Content{genai.NewContentFromText(extractionPrompt, genai.RoleUser)},
-// 		genConfig)
-// 	if err != nil {
-// 		return nil, err
-// 	}
+	// Map names to IDs
+	mentions := &ExtractedMentions{
+		Locations: []MentionedItem{},
+		Evidence:  []MentionedItem{},
+	}
 
-// 	// Parse the response
-// 	var extracted ExtractedItems
-// 	err = json.Unmarshal([]byte(resp.Text()), &extracted)
-// 	if err != nil {
-// 		return nil, err
-// 	}
+	// Process locations
+	for _, loc := range tempExtracted.Locations {
+		if id, exists := allLocations[strings.ToLower(strings.TrimSpace(loc.Name))]; exists {
+			mentions.Locations = append(mentions.Locations, MentionedItem{
+				Name:    loc.Name,
+				ID:      id,
+				Context: loc.Context,
+			})
+		}
+	}
 
-// 	return &extracted, nil
-// }
+	// Process evidence
+	for _, ev := range tempExtracted.Evidence {
+		if id, exists := allEvidence[strings.ToLower(strings.TrimSpace(ev.Name))]; exists {
+			mentions.Evidence = append(mentions.Evidence, MentionedItem{
+				Name:    ev.Name,
+				ID:      id,
+				Context: ev.Context,
+			})
+		}
+	}
 
-// findUnknownItems returns items that are mentioned but not in the known list
-// func findUnknownItems(mentioned []string, known []string) []string {
-// 	knownMap := make(map[string]bool)
-// 	for _, id := range known {
-// 		knownMap[id] = true
-// 	}
+	return mentions, nil
+}
 
-// 	var unknown []string
-// 	for _, id := range mentioned {
-// 		if !knownMap[id] {
-// 			unknown = append(unknown, id)
-// 		}
-// 	}
-// 	return unknown
-// }
+// modifyDialogueForUnavailableItems adjusts dialogue to explain unavailable items
+func modifyDialogueForUnavailableItems(
+	originalDialogue string,
+	unavailableLocations []MentionedItem,
+	unavailableEvidence []MentionedItem,
+	agent *agent.Agent) (string, error) {
 
-// modifyDialogue modifies the dialogue to handle unknown mentions appropriately
-// func modifyDialogue(originalDialogue string, unknownLocations []string, unknownEvidence []string, agent *agent.Agent) (string, error) {
-// 	if len(unknownLocations) == 0 && len(unknownEvidence) == 0 {
-// 		return originalDialogue, nil
-// 	}
+	if len(unavailableLocations) == 0 && len(unavailableEvidence) == 0 {
+		return originalDialogue, nil
+	}
 
-// 	// Construct modification prompt
-// 	modPrompt := fmt.Sprintf(`You are %s with personality: %s
+	// Create modification prompt
+	modPrompt := fmt.Sprintf(`You are %s with personality: %s
 
-// Your previous response mentioned items you don't actually know about:
-// - Unknown locations: %v
-// - Unknown evidence: %v
+Your response mentions some locations/evidence you cannot actually provide access to:
 
-// Modify your response to reflect your lack of knowledge while staying in character:
-// - Use natural phrases that fit your personality
-// - Don't break the flow of conversation
-// - Options: express confusion, redirect, be vague, or show suspicion
+Unavailable Locations (you know about them but can't grant access):
+%s
 
-// Original response: "%s"
+Unavailable Evidence (you know about them but don't possess them):
+%s
 
-// Modified response:`,
-// 		agent.CharacterName,
-// 		agent.Personality,
-// 		unknownLocations,
-// 		unknownEvidence,
-// 		originalDialogue)
+Modify your response to acknowledge these items while explaining why you can't provide them. Stay in character and maintain conversation flow.
 
-// 	// Create Gemini client
-// 	ctx := context.Background()
-// 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
-// 		APIKey: os.Getenv("GEMINI_API_KEY"),
-// 	})
-// 	if err != nil {
-// 		return originalDialogue, err
-// 	}
+Guidelines:
+- For locations: Explain you know about them but can't grant access (no clearance, don't know the way, it's restricted, etc.)
+- For evidence: Mention you've heard about it but don't have it (suggest others might, lost it, never had it, etc.)
+- Keep modifications natural and brief
+- Maintain your personality and speaking style
 
-// 	resp, err := client.Models.GenerateContent(ctx, "gemini-2.5-flash",
-// 		[]*genai.Content{genai.NewContentFromText(modPrompt, genai.RoleUser)},
-// 		nil)
-// 	if err != nil {
-// 		return originalDialogue, err
-// 	}
+Original response: "%s"
 
-// 	return resp.Text(), nil
-// }
+Modified response:`,
+		agent.CharacterName,
+		agent.Personality,
+		formatUnavailableItems(unavailableLocations),
+		formatUnavailableItems(unavailableEvidence),
+		originalDialogue)
 
-// verifyAndModifyResponse checks and modifies responses that mention unknown items
-// func verifyAndModifyResponse(response *MessageResponse, agentObj *agent.Agent, storyContext string) (*MessageResponse, error) {
-// 	// 1. Extract mentioned items using LLM
-// 	extracted, err := extractMentionedItems(response.Reply, storyContext, agentObj.StoryID)
-// 	if err != nil {
-// 		// Log but don't fail - use original response
-// 		fmt.Printf("Warning: Failed to extract mentioned items: %v\n", err)
-// 		return response, nil
-// 	}
+	// Create Gemini client
+	ctx := context.Background()
+	client, err := genai.NewClient(ctx, &genai.ClientConfig{
+		APIKey: os.Getenv("GEMINI_API_KEY"),
+	})
+	if err != nil {
+		return originalDialogue, err
+	}
 
-// 	// 2. Compare with agent's known items
-// 	unknownLocations := findUnknownItems(extracted.Locations, agentObj.KnowsLocationIDs)
-// 	unknownEvidence := findUnknownItems(extracted.Evidence, agentObj.HoldsEvidenceIDs)
+	resp, err := client.Models.GenerateContent(ctx, "gemini-2.5-flash",
+		[]*genai.Content{genai.NewContentFromText(modPrompt, genai.RoleUser)},
+		nil)
+	if err != nil {
+		return originalDialogue, err
+	}
 
-// 	// 3. If unknown items found, modify response
-// 	if len(unknownLocations) > 0 || len(unknownEvidence) > 0 {
-// 		fmt.Printf("Found unknown mentions - Locations: %v, Evidence: %v\n", unknownLocations, unknownEvidence)
+	return resp.Text(), nil
+}
 
-// 		modified, err := modifyDialogue(response.Reply, unknownLocations, unknownEvidence, agentObj)
-// 		if err != nil {
-// 			fmt.Printf("Warning: Failed to modify dialogue: %v\n", err)
-// 			return response, nil
-// 		}
+func getLocationNames(story *models.Story) []string {
+	var names []string
+	for _, loc := range story.Story.Locations {
+		names = append(names, loc.LocationName)
+	}
+	return names
+}
 
-// 		response.Reply = modified
-// 	}
+func getEvidenceNames(story *models.Story) []string {
+	var names []string
+	for _, char := range story.Story.Characters {
+		for _, ev := range char.HoldsEvidence {
+			names = append(names, ev.Title)
+		}
+	}
+	return names
+}
 
-// 	return response, nil
-// }
+func findUnavailableLocations(mentioned []MentionedItem, knownLocationIDs []string) []MentionedItem {
+	knownMap := make(map[string]bool)
+	for _, id := range knownLocationIDs {
+		knownMap[id] = true
+	}
+
+	var unavailable []MentionedItem
+	for _, item := range mentioned {
+		if !knownMap[item.ID] {
+			unavailable = append(unavailable, item)
+		}
+	}
+	return unavailable
+}
+
+func findUnavailableEvidence(mentioned []MentionedItem, heldEvidenceIDs []string) []MentionedItem {
+	heldMap := make(map[string]bool)
+	for _, id := range heldEvidenceIDs {
+		heldMap[id] = true
+	}
+
+	var unavailable []MentionedItem
+	for _, item := range mentioned {
+		if !heldMap[item.ID] {
+			unavailable = append(unavailable, item)
+		}
+	}
+	return unavailable
+}
+
+func formatUnavailableItems(items []MentionedItem) string {
+	if len(items) == 0 {
+		return "None"
+	}
+
+	var formatted []string
+	for _, item := range items {
+		formatted = append(formatted, fmt.Sprintf("- %s (mentioned in: \"%s\")", item.Name, item.Context))
+	}
+	return strings.Join(formatted, "\n")
+}
+
+// ExtractedMentions holds items mentioned in dialogue with their context
+type ExtractedMentions struct {
+	Locations []MentionedItem `json:"locations"`
+	Evidence  []MentionedItem `json:"evidence"`
+}
+
+// MentionedItem represents an item mentioned in dialogue
+type MentionedItem struct {
+	Name    string `json:"name"`
+	ID      string `json:"id"`
+	Context string `json:"context"` // Surrounding text for modification
+}
+
+
+
+
