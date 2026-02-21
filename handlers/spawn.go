@@ -310,20 +310,13 @@ CRITICAL INTERROGATION BEHAVIOR:
 - When cornered with evidence, admit only what can be proven, nothing more
 - Remember: confessing to serious crimes should be the LAST resort after all other options are exhausted
 
-JSON RESPONSE FORMAT:
-You must ALWAYS respond in the following JSON format:
-{
-  "reply": "Your character's response in natural conversation",
-  "revealed_evidences": ["exact name of evidence being revealed"],
-  "revealed_locations": ["exact name of location being revealed"]
-}
+IMPORTANT DIALOGUE FORMAT:
+- Only provide spoken dialogue - what your character says out loud
+- Do NOT include action descriptions like "I sigh", "I turn away", "I lean forward"
+- Do NOT write in third person or describe what you're doing
+- Simply speak as your character would speak
 
-WHEN TO REVEAL ITEMS:
-- Only include evidence names when you explicitly describe that evidence
-- Only include location names when you explicitly describe those locations
-- Use the EXACT names as shown in your evidence and location lists above
-- If not revealing anything, use empty arrays []
-- Example: If you mention "the bloodstained diary", include "Bloodstained Diary" in revealed_evidences`,
+Remember: You are a character in this story. Respond naturally and conversationally, staying true to your personality and knowledge. Focus on the dialogue and let the system handle tracking what you reveal.`,
 		character.Name,
 		character.AppearanceDescription,
 		character.PersonalityProfile,

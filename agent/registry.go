@@ -165,6 +165,7 @@ func LoadAgentFromDatabase(agentID string) (*Agent, error) {
 		KnowsLocationIDs:    agentDoc.KnowsLocationIDs,
 		RevealedEvidenceIDs: agentDoc.RevealedEvidenceIDs,
 		RevealedLocationIDs: agentDoc.RevealedLocationIDs,
+		LoadedFromDB:        true, // Mark as loaded from DB
 	}
 
 	// Initialize maps if nil
@@ -234,9 +235,15 @@ func LoadAgentFromDatabase(agentID string) (*Agent, error) {
 		}
 	}
 
-	// If no system message or empty history, add a basic one
+	// If no system message or empty history, add a more comprehensive one
 	if !hasSystemMessage || len(agent.History) == 0 {
+		// Build a system message for recovered agents
 		systemMessage := fmt.Sprintf(`You are %s with personality: %s.
+
+IMPORTANT: Only provide spoken dialogue - what your character says out loud. Do NOT include action descriptions like "I sigh" or narration. Simply speak as your character would speak.
+
+Continue the conversation naturally based on your character. Stay in character and respond as your character would.
+
 [Note: This agent was loaded from database after server restart. Continue conversation based on available history.]`,
 			agent.CharacterName, agent.Personality)
 

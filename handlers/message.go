@@ -31,6 +31,117 @@ type MessageResponse struct {
 	RevealedLocations []string `json:"revealed_locations"`
 }
 
+// analyzeAndProcessResponse analyzes a natural language response to extract reveals and modify for unavailable items
+func analyzeAndProcessResponse(naturalResponse string, agent *agent.Agent, story *models.Story) (*MessageResponse, error) {
+	// Fetch character's evidence and locations (reuse existing functions)
+	characterEvidence, err := fetchEvidenceDetails(agent.StoryID, agent.HoldsEvidenceIDs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch evidence: %w", err)
+	}
+
+	characterLocations, err := fetchLocationDetailsForIDs(agent.StoryID, agent.KnowsLocationIDs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch locations: %w", err)
+	}
+
+	// Log character's possessions
+	log.Printf("[MESSAGE_ANALYSIS_DATA] Agent %s has %d evidence items and %d locations",
+		agent.CharacterName, len(characterEvidence), len(characterLocations))
+
+	// Build analysis prompt
+	analysisPrompt := fmt.Sprintf(`You are analyzing a character's dialogue response for a detective game.
+
+CHARACTER PROFILE:
+- Name: %s
+- Personality: %s
+
+EVIDENCE THIS CHARACTER POSSESSES:
+%s
+
+LOCATIONS THIS CHARACTER KNOWS:
+%s
+
+CHARACTER'S RESPONSE TO ANALYZE:
+"%s"
+
+TASKS:
+1. First, scan the response for ANY specific evidence or location mentions
+2. For each mentioned item, check if it exists in the character's possession lists above
+3. Modify the response based on availability:
+   - If character HAS the item: Keep as-is, mark as revealed if actively showing/describing
+   - If character DOESN'T HAVE the item: MUST modify to be vague or explain lack of knowledge
+
+MODIFICATION RULES FOR UNAVAILABLE ITEMS:
+- Location not in list: Change specific directions to vague references
+  - BAD: "Go to the Medical Bay on Deck 7, Sector Gamma"
+  - GOOD: "I believe there's a medical facility somewhere on the station"
+- Evidence not in list: Change to hearsay or lack of possession
+  - BAD: "Here's the murder weapon, a silver knife"
+  - GOOD: "I've heard about a murder weapon but I don't have access to it"
+
+REVEAL DETECTION:
+- Only mark as "revealed" when character actively shows/hands over items they ACTUALLY possess
+- Casual mentions are not reveals
+- Never mark unavailable items as revealed
+
+Return JSON:
+{
+  "reply": "The final response (modified if needed, otherwise original) - IMPORTANT: Remove any action narration like 'I sigh' or 'I turn back' and keep only the spoken dialogue",
+  "revealed_evidences": ["IDs of evidence being revealed - use the ID field, not the name - ONLY items the character possesses"],
+  "revealed_locations": ["IDs of locations being revealed - use the ID field, not the name - ONLY locations the character knows"]
+}
+
+CRITICAL: If a character mentions a location/evidence not in their possession lists, you MUST modify the response to be vague or indicate lack of knowledge. The character CANNOT give specific details about things they don't know.`,
+		agent.CharacterName,
+		agent.Personality,
+		formatCharacterEvidence(characterEvidence),
+		formatCharacterLocations(characterLocations),
+		naturalResponse)
+
+	// Log the full analysis prompt
+	log.Printf("[MESSAGE_ANALYSIS_PROMPT] Full analysis prompt for %s:\n%s", agent.CharacterName, analysisPrompt)
+
+	// Create client and call Gemini
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	client, err := genai.NewClient(ctx, &genai.ClientConfig{
+		APIKey: os.Getenv("GEMINI_API_KEY"),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	genConfig := &genai.GenerateContentConfig{
+		ResponseMIMEType: "application/json",
+	}
+
+	resp, err := client.Models.GenerateContent(ctx, "gemini-2.5-flash",
+		[]*genai.Content{genai.NewContentFromText(analysisPrompt, genai.RoleUser)},
+		genConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	// Log the raw analysis response
+	rawAnalysisResponse := resp.Text()
+	log.Printf("[MESSAGE_ANALYSIS_RESPONSE] Raw analysis response for %s: %s", agent.CharacterName, rawAnalysisResponse)
+
+	// Parse the analysis response
+	var analysisResult MessageResponse
+	if err := json.Unmarshal([]byte(rawAnalysisResponse), &analysisResult); err != nil {
+		return nil, fmt.Errorf("failed to parse analysis: %w", err)
+	}
+
+	// Log if the response was modified
+	if analysisResult.Reply != naturalResponse {
+		log.Printf("[MESSAGE_ANALYSIS_MODIFIED] Response was modified for %s. Original length: %d, Modified length: %d",
+			agent.CharacterName, len(naturalResponse), len(analysisResult.Reply))
+	}
+
+	return &analysisResult, nil
+}
+
 func MessageHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -132,10 +243,7 @@ func MessageHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	genConfig := &genai.GenerateContentConfig{
-		ResponseMIMEType: "application/json",
-	}
-
+	// Step 1: Get natural language response (no JSON format)
 	// Ensure we don't have any nil entries in history
 	validHistory := make([]*genai.Content, 0, len(agentObj.History))
 	for i, content := range agentObj.History {
@@ -148,7 +256,7 @@ func MessageHandler(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[MESSAGE_DEBUG] Calling Gemini for agent %s with history length: %d",
 		agentObj.CharacterName, len(validHistory))
-	resp, err := client.Models.GenerateContent(ctx, "gemini-2.5-flash", validHistory, genConfig)
+	resp, err := client.Models.GenerateContent(ctx, "gemini-2.5-flash", validHistory, nil) // No genConfig with JSON format
 	if err != nil {
 		log.Printf("[MESSAGE_ERROR] Failed to get Gemini response for agent %s: %v", agentObj.CharacterName, err)
 		log.Printf("[MESSAGE_DEBUG] Valid history length: %d (original: %d)", len(validHistory), len(agentObj.History))
@@ -166,81 +274,71 @@ func MessageHandler(w http.ResponseWriter, r *http.Request) {
 	// Update agentObj.History to use the validated history
 	agentObj.History = validHistory
 
-	// Parse the JSON response
-	aiResponse, err := parseAIResponse(resp.Text())
+	// Get plain text response
+	naturalResponse := resp.Text()
+	log.Printf("[MESSAGE_NATURAL] Agent %s natural response: %s",
+		agentObj.CharacterName, naturalResponse)
+
+	// Step 2: Analyze and process the natural response
+	var aiResponse *MessageResponse
+
+	// Fetch the story for analysis
+	storyObjID, err := primitive.ObjectIDFromHex(agentObj.StoryID)
 	if err != nil {
-		// Fallback to plain text response if JSON parsing fails
+		log.Printf("[MESSAGE_ERROR] Failed to parse story ID: %v", err)
+		// Fallback to natural response with no reveals
 		aiResponse = &MessageResponse{
-			Reply:             resp.Text(),
+			Reply:             naturalResponse,
 			RevealedEvidences: []string{},
 			RevealedLocations: []string{},
 		}
 	} else {
-		storyObjID, err := primitive.ObjectIDFromHex(agentObj.StoryID)
-		if err == nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
 
-			var story models.Story
-			collection := db.GetCollection("stories")
-			err = collection.FindOne(ctx, bson.M{"_id": storyObjID}).Decode(&story)
+		var story models.Story
+		collection := db.GetCollection("stories")
+		err = collection.FindOne(ctx, bson.M{"_id": storyObjID}).Decode(&story)
 
-			if err == nil {
-				// Verify dialogue against character's knowledge (only sends character-specific items)
-				log.Printf("[DIALOGUE_VERIFY] Starting verification for agent %s (%s)", agentObj.CharacterName, agentObj.ID)
-				unavailableItems, err := verifyDialogueAgainstCharacterKnowledge(
-					aiResponse.Reply,
-					agentObj,
-					&story)
-				if err != nil {
-					log.Printf("[DIALOGUE_VERIFY_FAIL] Agent %s - Failed to verify dialogue: %v", agentObj.CharacterName, err)
-					// Continue without modification if verification fails
-				} else {
-					// Log what was found
-					if len(unavailableItems.Locations) > 0 || len(unavailableItems.Evidence) > 0 {
-						log.Printf("[DIALOGUE_VERIFY_FOUND] Agent %s - Found unavailable items: %d locations, %d evidence",
-							agentObj.CharacterName, len(unavailableItems.Locations), len(unavailableItems.Evidence))
-
-						// Log details of unavailable items
-						for _, loc := range unavailableItems.Locations {
-							log.Printf("[DIALOGUE_VERIFY_DETAIL] Agent %s - Unavailable location: %s (ID: %s)",
-								agentObj.CharacterName, loc.Name, loc.ID)
-						}
-						for _, ev := range unavailableItems.Evidence {
-							log.Printf("[DIALOGUE_VERIFY_DETAIL] Agent %s - Unavailable evidence: %s (ID: %s)",
-								agentObj.CharacterName, ev.Name, ev.ID)
-						}
-
-						// Modify dialogue
-						originalReply := aiResponse.Reply
-						modifiedReply, err := modifyDialogueForUnavailableItems(
-							aiResponse.Reply,
-							unavailableItems.Locations,
-							unavailableItems.Evidence,
-							agentObj)
-
-						if err == nil {
-							aiResponse.Reply = modifiedReply
-							log.Printf("[DIALOGUE_MODIFY_SUCCESS] Agent %s - Successfully modified dialogue", agentObj.CharacterName)
-							log.Printf("[DIALOGUE_MODIFY_ORIGINAL] %s", originalReply)
-							log.Printf("[DIALOGUE_MODIFY_NEW] %s", modifiedReply)
-						} else {
-							log.Printf("[DIALOGUE_MODIFY_FAIL] Agent %s - Failed to modify dialogue: %v", agentObj.CharacterName, err)
-						}
-					} else {
-						log.Printf("[DIALOGUE_VERIFY_CLEAN] Agent %s - No unavailable items found, dialogue is clean", agentObj.CharacterName)
-					}
+		if err != nil {
+			log.Printf("[MESSAGE_ERROR] Failed to fetch story: %v", err)
+			// Fallback to natural response with no reveals
+			aiResponse = &MessageResponse{
+				Reply:             naturalResponse,
+				RevealedEvidences: []string{},
+				RevealedLocations: []string{},
+			}
+		} else {
+			// Analyze the natural response
+			aiResponse, err = analyzeAndProcessResponse(naturalResponse, agentObj, &story)
+			if err != nil {
+				log.Printf("[MESSAGE_ANALYSIS_ERROR] Failed to analyze response: %v", err)
+				// Fallback: use natural response with no reveals
+				aiResponse = &MessageResponse{
+					Reply:             naturalResponse,
+					RevealedEvidences: []string{},
+					RevealedLocations: []string{},
 				}
+			} else {
+				log.Printf("[MESSAGE_ANALYSIS_SUCCESS] Analysis complete - Reply length: %d, Revealed evidence: %d, Revealed locations: %d",
+					len(aiResponse.Reply), len(aiResponse.RevealedEvidences), len(aiResponse.RevealedLocations))
 
-				// Now handle the revealed items arrays
-				evidenceMap := buildEvidenceNameMap(&story)
-				locationMap := buildLocationNameMap(&story)
+				// Handle the revealed items arrays (analysis now returns IDs directly)
+				originalEvidenceCount := len(aiResponse.RevealedEvidences)
+				originalLocationCount := len(aiResponse.RevealedLocations)
 
-				evidenceIDs := mapRevealedNamesToIDs(aiResponse.RevealedEvidences, evidenceMap)
-				locationIDs := mapRevealedNamesToIDs(aiResponse.RevealedLocations, locationMap)
+				aiResponse.RevealedEvidences = validateRevealedItems(aiResponse.RevealedEvidences, agentObj.HoldsEvidenceIDs)
+				aiResponse.RevealedLocations = validateRevealedItems(aiResponse.RevealedLocations, agentObj.KnowsLocationIDs)
 
-				aiResponse.RevealedEvidences = validateRevealedItems(evidenceIDs, agentObj.HoldsEvidenceIDs)
-				aiResponse.RevealedLocations = validateRevealedItems(locationIDs, agentObj.KnowsLocationIDs)
+				// Log if items were filtered out
+				if len(aiResponse.RevealedEvidences) < originalEvidenceCount {
+					log.Printf("[MESSAGE_VALIDATION] Filtered out %d invalid evidence reveals for %s",
+						originalEvidenceCount - len(aiResponse.RevealedEvidences), agentObj.CharacterName)
+				}
+				if len(aiResponse.RevealedLocations) < originalLocationCount {
+					log.Printf("[MESSAGE_VALIDATION] Filtered out %d invalid location reveals for %s",
+						originalLocationCount - len(aiResponse.RevealedLocations), agentObj.CharacterName)
+				}
 
 				updateAgentTracking(agentObj, aiResponse.RevealedEvidences, aiResponse.RevealedLocations)
 			}
@@ -439,7 +537,7 @@ func formatCharacterEvidence(evidence []models.Evidence) string {
 
 	var formatted []string
 	for _, e := range evidence {
-		formatted = append(formatted, fmt.Sprintf("- %s: %s", e.Title, e.Description))
+		formatted = append(formatted, fmt.Sprintf("- [ID: %s] %s: %s", e.ID, e.Title, e.Description))
 	}
 	return strings.Join(formatted, "\n")
 }
@@ -452,7 +550,7 @@ func formatCharacterLocations(locations []models.Location) string {
 
 	var formatted []string
 	for _, l := range locations {
-		formatted = append(formatted, fmt.Sprintf("- %s: %s", l.LocationName, l.VisualDescription))
+		formatted = append(formatted, fmt.Sprintf("- [ID: %s] %s: %s", l.ID, l.LocationName, l.VisualDescription))
 	}
 	return strings.Join(formatted, "\n")
 }

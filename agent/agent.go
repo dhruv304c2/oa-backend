@@ -13,4 +13,5 @@ type Agent struct {
 	KnowsLocationIDs    []string           // Location IDs character knows
 	RevealedEvidenceIDs map[string]bool    // Track revealed evidence
 	RevealedLocationIDs map[string]bool    // Track revealed locations
+	LoadedFromDB        bool                // Track if agent was loaded from DB (may need format reminders)
 }
