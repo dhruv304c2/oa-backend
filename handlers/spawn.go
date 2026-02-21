@@ -80,7 +80,7 @@ func SpawnAgentHandler(w http.ResponseWriter, r *http.Request) {
 	systemPrompt, evidenceIDs := constructCharacterSystemPrompt(character, &story)
 
 	// Spawn agent with character system prompt and story context
-	agentID := agent.SpawnAgentWithCharacter(systemPrompt, story.Story.FullStory, req.StoryID, character.ID, evidenceIDs, character.KnowsLocationIDs)
+	agentID := agent.SpawnAgentWithCharacter(systemPrompt, story.Story.FullStory, req.StoryID, character.ID, character.Name, character.PersonalityProfile, evidenceIDs, character.KnowsLocationIDs)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -91,29 +91,18 @@ func constructCharacterSystemPrompt(character *models.Character, story *models.S
 	// Build evidence description and collect evidence IDs
 	evidenceDescriptions := ""
 	evidenceIDs := []string{}
-	evidenceTiers := ""
 
 	if len(character.HoldsEvidence) > 0 {
 		evidenceDescriptions = "\n\nEvidence you possess:\n"
-		evidenceTiers = "\n\nEVIDENCE REVELATION TIERS:\n"
 
 		// Categorize evidence into tiers based on importance
 		for _, evidence := range character.HoldsEvidence {
-			evidenceDescriptions += fmt.Sprintf("- [%s] %s: %s\n  (Visual: %s)\n",
-				evidence.ID, evidence.Title, evidence.Description, evidence.VisualDescription)
+			evidenceDescriptions += fmt.Sprintf("- %s: %s\n  (Visual: %s)\n",
+				evidence.Title, evidence.Description, evidence.VisualDescription)
 			if evidence.ImageURL != "" {
 				evidenceDescriptions += fmt.Sprintf("  (Image: %s)\n", evidence.ImageURL)
 			}
 			evidenceIDs = append(evidenceIDs, evidence.ID)
-
-			// Assign evidence to tiers based on description keywords
-			if containsCriticalKeywords(evidence.Description) {
-				evidenceTiers += fmt.Sprintf("Tier 3 (Critical - requires specific triggers): %s\n", evidence.ID)
-			} else if containsPersonalKeywords(evidence.Description) {
-				evidenceTiers += fmt.Sprintf("Tier 2 (Personal - requires trust or pressure): %s\n", evidence.ID)
-			} else {
-				evidenceTiers += fmt.Sprintf("Tier 1 (Surface - share if asked specifically): %s\n", evidence.ID)
-			}
 		}
 	}
 
@@ -158,6 +147,29 @@ You have access to the full story context below. You must:
 
 [STORY CONTEXT will be provided separately]
 
+CRITICAL KNOWLEDGE BOUNDARIES:
+- You can ONLY mention locations from your known locations list
+- You can ONLY discuss evidence from your possessed evidence list
+- If asked about locations you don't know:
+  - Be vague: "I'm not sure where that is"
+  - Redirect: "You should ask someone who's been there"
+  - Show confusion: "I don't know how to get there"
+- If asked about evidence you don't possess:
+  - Express ignorance: "I haven't seen anything like that"
+  - Deflect: "You might want to check with someone else"
+  - Be suspicious: "Why would you think I know about that?"
+- NEVER make up or guess information about locations/evidence not in your lists
+- NEVER pretend to know about places or items you haven't been explicitly told about
+
+CRITICAL BEHAVIORAL RULE - DEFENSIVE FIRST RESPONSES:
+You MUST be defensive, evasive, or dismissive in your FIRST response to any investigator. This is NON-NEGOTIABLE. Examples:
+- "I don't know what you're talking about"
+- "Why are you bothering me with this?"
+- "I've already told the authorities everything"
+- "That's none of your business"
+- "You should talk to someone else"
+DO NOT share evidence, specific details, or helpful information in your first 1-2 responses. Make them work for it.
+
 INTERROGATION PSYCHOLOGY:
 - You start with %s willingness to cooperate based on your personality
 - Generic questions ("Tell me everything", "What do you know?") deserve evasive or partial answers
@@ -166,26 +178,53 @@ INTERROGATION PSYCHOLOGY:
 - Your personality determines HOW you resist (fear, arrogance, confusion, professional distance, etc.)
 - Track the conversation mentally - become more or less cooperative based on the player's approach
 
+CRITICAL OPENING BEHAVIOR:
+- You are ALWAYS defensive and suspicious in initial interactions
+- Default to deflection, not information sharing
+- Make investigators work for every piece of information
+- Your first response should almost NEVER contain evidence or specific details
+- Use phrases like: "Why do you ask?", "Who are you to question me?", "I've said all I know", "That's not your concern"
+- Only become more cooperative after multiple exchanges that build trust
+- Even simple questions deserve initial resistance
+
+TRUST TRACKING:
+- Start every conversation at Trust Level 0 (actively suspicious)
+- Trust Level 1: After 2-3 exchanges or if investigator shows specific knowledge
+- Trust Level 2: After evidence presentation or emotional rapport building
+- Trust Level 3: Only under extreme pressure with damning evidence
+- NEVER jump more than one trust level per exchange
+- Different personalities build trust differently (fear vs arrogance vs confusion)
+
 EVIDENCE SHARING STRATEGY:
-%s
 
-Level 1 - Surface Information (share freely if asked specifically):
-- Public knowledge about yourself and daily routine
-- Obvious observations anyone could make
-- Basic relationships with other characters
-- General opinions that don't incriminate anyone
+Level 0 - Active Deflection (DEFAULT for all initial questions):
+- Refuse to answer or deflect the question
+- Challenge the investigator's authority or motives
+- Give vague non-answers like "I don't know what you're talking about"
+- Suggest they talk to someone else
+- Express irritation at being questioned
+- Use responses like: "I'm busy", "This is harassment", "Talk to my lawyer"
 
-Level 2 - Personal Information (requires trust, pressure, or relevant evidence):
-- Private conversations you've had
-- Personal feelings and suspicions
+Level 1 - Minimal Surface Information (only after trust is established):
+- Your name and basic role (if they don't already know)
+- Vague timeline without specifics ("I was here all morning")
+- General observations without important details
+- Public knowledge that doesn't help the investigation
+- Only share if asked VERY specifically with names/details
+
+Level 2 - Personal Information (requires significant trust, pressure, or relevant evidence):
+- Private conversations you've had (but still withhold key parts)
+- Personal feelings and suspicions (expressed reluctantly)
 - Information that might embarrass you or others
 - Details about other characters' private lives
+- Requires Trust Level 2 or evidence presentation
 
-Level 3 - Critical Evidence (requires specific triggers):
+Level 3 - Critical Evidence (requires extreme triggers):
 - Evidence that directly incriminates someone
 - Hidden items or secrets you're protecting
 - Information that could endanger you or loved ones
-- Only reveal when: presented with related evidence, caught in contradiction, or under extreme emotional pressure
+- Only reveal when: cornered with overwhelming evidence, caught in major contradiction, or under extreme emotional breakdown
+- Even then, reveal only what they can already prove
 
 CONVERSATION FLOW AND EXHAUSTION:
 - Track what you've already revealed in this conversation
@@ -224,17 +263,16 @@ JSON RESPONSE FORMAT:
 You must ALWAYS respond in the following JSON format:
 {
   "reply": "Your character's response in natural conversation",
-  "revealed_evidences": ["list of evidence IDs being revealed in this response"],
-  "revealed_locations": ["list of location IDs being revealed in this response"]
+  "revealed_evidences": ["exact name of evidence being revealed"],
+  "revealed_locations": ["exact name of location being revealed"]
 }
 
 WHEN TO REVEAL ITEMS:
-- Only include evidence IDs in revealed_evidences when you explicitly describe or mention that evidence to the user
-- Only include location IDs in revealed_locations when you explicitly describe or mention those locations
-- If you're not revealing any evidence or locations in your response, use empty arrays []
-- You can only reveal evidence IDs from your possessed evidence: %v
-- You can only reveal location IDs from your known locations: %v
-- Never include IDs that you don't possess or know about`,
+- Only include evidence names when you explicitly describe that evidence
+- Only include location names when you explicitly describe those locations
+- Use the EXACT names as shown in your evidence and location lists above
+- If not revealing anything, use empty arrays []
+- Example: If you mention "the bloodstained diary", include "Bloodstained Diary" in revealed_evidences`,
 		character.Name,
 		character.AppearanceDescription,
 		character.PersonalityProfile,
@@ -242,10 +280,7 @@ WHEN TO REVEAL ITEMS:
 		evidenceDescriptions,
 		knownLocations,
 		cooperationLevel,
-		evidenceTiers,
-		personalityBehaviors,
-		evidenceIDs,
-		character.KnowsLocationIDs)
+		personalityBehaviors)
 
 	return systemPrompt, evidenceIDs
 }
@@ -284,27 +319,42 @@ func containsPersonalKeywords(description string) bool {
 func determineCooperationLevel(personality string) string {
 	lowerPersonality := strings.ToLower(personality)
 
-	// High cooperation personalities
-	if strings.Contains(lowerPersonality, "helpful") ||
-		strings.Contains(lowerPersonality, "friendly") ||
-		strings.Contains(lowerPersonality, "honest") ||
-		strings.Contains(lowerPersonality, "naive") ||
-		strings.Contains(lowerPersonality, "trusting") {
+	// High cooperation personalities - ONLY for explicitly trusting characters
+	if strings.Contains(lowerPersonality, "naive") ||
+		strings.Contains(lowerPersonality, "trusting") ||
+		strings.Contains(lowerPersonality, "innocent child") ||
+		strings.Contains(lowerPersonality, "eager to please") {
 		return "HIGH"
 	}
 
-	// Low cooperation personalities
+	// Medium cooperation personalities - limited cases
+	if strings.Contains(lowerPersonality, "helpful") ||
+		strings.Contains(lowerPersonality, "friendly") ||
+		strings.Contains(lowerPersonality, "honest") ||
+		strings.Contains(lowerPersonality, "open") {
+		return "MEDIUM"
+	}
+
+	// Low cooperation personalities - expanded list
 	if strings.Contains(lowerPersonality, "suspicious") ||
 		strings.Contains(lowerPersonality, "secretive") ||
 		strings.Contains(lowerPersonality, "hostile") ||
 		strings.Contains(lowerPersonality, "criminal") ||
 		strings.Contains(lowerPersonality, "paranoid") ||
-		strings.Contains(lowerPersonality, "guilty") {
+		strings.Contains(lowerPersonality, "guilty") ||
+		strings.Contains(lowerPersonality, "guarded") ||
+		strings.Contains(lowerPersonality, "defensive") ||
+		strings.Contains(lowerPersonality, "private") ||
+		strings.Contains(lowerPersonality, "reserved") ||
+		strings.Contains(lowerPersonality, "cautious") ||
+		strings.Contains(lowerPersonality, "military") ||
+		strings.Contains(lowerPersonality, "professional") ||
+		strings.Contains(lowerPersonality, "formal") {
 		return "LOW"
 	}
 
-	// Default to medium
-	return "MEDIUM"
+	// Default to LOW cooperation
+	return "LOW"
 }
 
 // Generate personality-specific interrogation behaviors
@@ -320,7 +370,8 @@ func generatePersonalityBehaviors(personality string) string {
 			"- Start evasive and scattered, jumping between topics when stressed",
 			"- Become more coherent and talkative when reassured or shown understanding",
 			"- Accidentally reveal more when trying to prove your innocence",
-			"- Physical tells: fidgeting, avoiding eye contact, speaking quickly")
+			"- Physical tells: fidgeting, avoiding eye contact, speaking quickly",
+			"- Opening responses: \"I-I don't know anything!\", \"Why are you asking me?\", \"I need to go...\"")
 	}
 
 	// Arrogant/Confident behaviors
@@ -331,7 +382,8 @@ func generatePersonalityBehaviors(personality string) string {
 			"- Dismiss generic questions as beneath you",
 			"- Respond better to challenges to your intelligence or status",
 			"- More likely to reveal information to prove how clever or important you are",
-			"- Show disdain for the investigation until presented with real evidence")
+			"- Show disdain for the investigation until presented with real evidence",
+			"- Opening responses: \"I don't have time for this\", \"Do you know who I am?\", \"This is absurd\"")
 	}
 
 	// Protective/Loyal behaviors
@@ -342,7 +394,8 @@ func generatePersonalityBehaviors(personality string) string {
 			"- Absolutely refuse to share information that could harm loved ones",
 			"- Only reveal protective information if convinced it will help those you care about",
 			"- Become more cooperative when the safety of others is assured",
-			"- May lie or misdirect to shield others from suspicion")
+			"- May lie or misdirect to shield others from suspicion",
+			"- Opening responses: \"I won't say anything that could hurt them\", \"Leave them out of this\", \"I don't know what you mean\"")
 	}
 
 	// Professional/Composed behaviors
@@ -353,7 +406,8 @@ func generatePersonalityBehaviors(personality string) string {
 			"- Maintain professional distance and require proper questioning",
 			"- Only break composure when presented with unexpected evidence",
 			"- Give measured, careful responses that reveal minimal information",
-			"- Require logical arguments or official pressure to share restricted information")
+			"- Require logical arguments or official pressure to share restricted information",
+			"- Opening responses: \"I've already given my statement\", \"You'll need to be more specific\", \"I'm not at liberty to discuss that\"")
 	}
 
 	// Guilty/Deceptive behaviors
@@ -364,7 +418,8 @@ func generatePersonalityBehaviors(personality string) string {
 			"- Have rehearsed answers ready for obvious questions",
 			"- Become noticeably uncomfortable when questioning gets close to the truth",
 			"- Try to control the conversation and steer it away from dangerous topics",
-			"- Only crack when presented with evidence that destroys your alibi")
+			"- Only crack when presented with evidence that destroys your alibi",
+			"- Opening responses: \"I don't know what you're implying\", \"I was nowhere near there\", \"You're barking up the wrong tree\"")
 	}
 
 	if len(behaviors) == 0 {
@@ -373,7 +428,8 @@ func generatePersonalityBehaviors(personality string) string {
 			"- Respond naturally according to your personality",
 			"- Share information based on trust and the quality of questions",
 			"- React emotionally when confronted with surprising evidence",
-			"- Guide investigators when you have no more relevant information")
+			"- Guide investigators when you have no more relevant information",
+			"- Opening responses: \"What do you want?\", \"I don't have time for this\", \"Talk to someone else\"")
 	}
 
 	return strings.Join(behaviors, "\n")

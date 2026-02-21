@@ -33,7 +33,7 @@ func SpawnAgent(systemPrompt string) string {
 }
 
 // SpawnAgentWithCharacter creates a new agent with character-specific system prompt
-func SpawnAgentWithCharacter(systemPrompt, storyContext, storyID, characterID string, evidenceIDs []string, locationIDs []string) string {
+func SpawnAgentWithCharacter(systemPrompt, storyContext, storyID, characterID, characterName, personality string, evidenceIDs []string, locationIDs []string) string {
 	rand.Seed(time.Now().UnixNano())
 	agentID := fmt.Sprintf("agent-%d", rand.Intn(1000000))
 
@@ -48,6 +48,8 @@ func SpawnAgentWithCharacter(systemPrompt, storyContext, storyID, characterID st
 		History:             []*genai.Content{systemContent},
 		StoryID:             storyID,
 		CharacterID:         characterID,
+		CharacterName:       characterName,
+		Personality:         personality,
 		HoldsEvidenceIDs:    evidenceIDs,
 		KnowsLocationIDs:    locationIDs,
 		RevealedEvidenceIDs: make(map[string]bool),
