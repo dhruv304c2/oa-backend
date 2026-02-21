@@ -3,10 +3,12 @@ package handlers
 import (
 	"agent/agent"
 	"agent/db"
+	dbmodels "agent/db/models"
 	"agent/models"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -79,12 +81,38 @@ func SpawnAgentHandler(w http.ResponseWriter, r *http.Request) {
 	// Construct system prompt for the character and get evidence IDs
 	systemPrompt, evidenceIDs := constructCharacterSystemPrompt(character, &story)
 
-	// Spawn agent with character system prompt and story context
-	agentID := agent.SpawnAgentWithCharacter(systemPrompt, story.Story.FullStory, req.StoryID, character.ID, character.Name, character.PersonalityProfile, evidenceIDs, character.KnowsLocationIDs)
+	// Create agent document for database
+	agentDoc := &dbmodels.AgentDocument{
+		StoryID:             storyObjID,
+		CharacterID:         character.ID,
+		CharacterName:       character.Name,
+		Personality:         character.PersonalityProfile,
+		HoldsEvidenceIDs:    evidenceIDs,
+		KnowsLocationIDs:    character.KnowsLocationIDs,
+		RevealedEvidenceIDs: make(map[string]bool),
+		RevealedLocationIDs: make(map[string]bool),
+	}
+
+	// Create in database first
+	dbCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	agentObjID, err := db.CreateAgent(dbCtx, agentDoc)
+	if err != nil {
+		// Fallback to in-memory only if DB fails
+		log.Printf("Failed to create agent in DB: %v", err)
+		agentObjID = primitive.NewObjectID()
+	}
+
+	// Spawn agent with DB ID
+	agentIDStr := agentObjID.Hex()
+	agent.SpawnAgentWithCharacterAndID(agentIDStr, systemPrompt, story.Story.FullStory,
+		req.StoryID, character.ID, character.Name, character.PersonalityProfile,
+		evidenceIDs, character.KnowsLocationIDs)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(SpawnResponse{AgentID: agentID})
+	json.NewEncoder(w).Encode(SpawnResponse{AgentID: agentIDStr})
 }
 
 func constructCharacterSystemPrompt(character *models.Character, story *models.Story) (string, []string) {

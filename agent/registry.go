@@ -70,6 +70,32 @@ func GetAgentByID(id string) (*Agent, bool) {
 	return agent, ok
 }
 
+// SpawnAgentWithCharacterAndID creates a new agent with a specific ID and character-specific system prompt
+func SpawnAgentWithCharacterAndID(agentID, systemPrompt, storyContext, storyID, characterID, characterName, personality string, evidenceIDs []string, locationIDs []string) {
+	// Combine system prompt and story context into one comprehensive system prompt
+	fullSystemPrompt := fmt.Sprintf("%s\n\n[STORY CONTEXT FOR REFERENCE]:\n%s", systemPrompt, storyContext)
+
+	// Create system content as the initial state
+	systemContent := genai.NewContentFromText(fullSystemPrompt, genai.RoleModel)
+
+	agent := &Agent{
+		ID:                  agentID,
+		History:             []*genai.Content{systemContent},
+		StoryID:             storyID,
+		CharacterID:         characterID,
+		CharacterName:       characterName,
+		Personality:         personality,
+		HoldsEvidenceIDs:    evidenceIDs,
+		KnowsLocationIDs:    locationIDs,
+		RevealedEvidenceIDs: make(map[string]bool),
+		RevealedLocationIDs: make(map[string]bool),
+	}
+
+	mu.Lock()
+	AgentRegistry[agentID] = agent
+	mu.Unlock()
+}
+
 func DeleteAgent(id string) {
 	mu.Lock()
 	defer mu.Unlock()
