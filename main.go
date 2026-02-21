@@ -7,6 +7,7 @@ import (
 
 	"agent/db"
 	"agent/handlers"
+	"agent/middleware"
 	"github.com/joho/godotenv"
 )
 
@@ -25,10 +26,14 @@ func main() {
 	}
 	defer db.Close()
 
-	// Set up HTTP handlers
-	http.HandleFunc("/spawn", handlers.SpawnAgentHandler)
-	http.HandleFunc("/message", handlers.MessageHandler)
-	//http.HandleFunc("/delete", handlers.DeleteAgentHandler)
+	// Set up HTTP handlers with CORS
+	http.HandleFunc("/spawn", middleware.EnableCORS(handlers.SpawnAgentHandler))
+	http.HandleFunc("/message", middleware.EnableCORS(handlers.MessageHandler))
+	http.HandleFunc("/score", middleware.EnableCORS(handlers.ScoreTheoryHandler))
+	http.HandleFunc("/feed", middleware.EnableCORS(handlers.FeedHandler))
+	http.HandleFunc("/story", middleware.EnableCORS(handlers.StoryDetailHandler))
+	http.HandleFunc("/stories/", middleware.EnableCORS(handlers.StoryDetailRESTHandler)) // RESTful route
+	//http.HandleFunc("/delete", middleware.EnableCORS(handlers.DeleteAgentHandler))
 
 	fmt.Println("Server running on http://localhost:8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
