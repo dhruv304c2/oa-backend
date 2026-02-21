@@ -30,14 +30,23 @@ go mod download
 
 3. Create a `.env` file in the root directory:
 ```env
-GEMINI_API_KEY=your_gemini_api_key
+# Database
 MONGODB_URI=mongodb://localhost:27017/case-gen
+
+# AI Service
+GEMINI_API_KEY=your_gemini_api_key
+
+# CORS Configuration
+ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000
+# Optional: Allow all origins (development only)
+# CORS_ALLOW_ALL=true
 ```
 
 Or set environment variables directly:
 ```bash
 export MONGODB_URI="mongodb://localhost:27017/case-gen"
 export GEMINI_API_KEY="your-gemini-api-key"
+export ALLOWED_ORIGINS="http://localhost:5173,http://localhost:3000"
 ```
 
 4. Run the server:
