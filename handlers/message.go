@@ -259,7 +259,7 @@ func MessageHandler(w http.ResponseWriter, r *http.Request) {
 		if err := db.SaveConversationMessageWithVersions(ctx, agentID, naturalContent, processedContent, "model", index, revealedEvidences, revealedLocations); err != nil {
 			log.Printf("Failed to persist AI response: %v", err)
 		}
-	}(req.AgentID, aiResponse.Reply, naturalResponse, aiResponse.RevealedEvidences, aiResponse.RevealedLocations, len(agentObj.History)-1)
+	}(req.AgentID, aiResponse.Reply, aiResponse.Reply, aiResponse.RevealedEvidences, aiResponse.RevealedLocations, len(agentObj.History)-1)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(aiResponse)
