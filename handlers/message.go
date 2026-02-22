@@ -200,14 +200,22 @@ func MessageHandler(w http.ResponseWriter, r *http.Request) {
 
 		// Append evidence details to the user message
 		if len(evidenceDetails) > 0 {
-			userMessage += "\n\n[USER IS PRESENTING THE FOLLOWING EVIDENCE TO YOU]:"
+			userMessage += "\n\n========================================\n"
+			userMessage += "[USER IS PRESENTING THE FOLLOWING EVIDENCE TO YOU]:\n"
+			userMessage += "========================================\n"
 			for _, evidence := range evidenceDetails {
-				userMessage += fmt.Sprintf("\n- %s: %s\n  (Visual: %s)",
-					evidence.Title, evidence.Description, evidence.VisualDescription)
+				userMessage += fmt.Sprintf("EVIDENCE: %s\n", evidence.Title)
+				userMessage += fmt.Sprintf("Description: %s\n", evidence.Description)
+				userMessage += fmt.Sprintf("Visual: %s\n", evidence.VisualDescription)
 				if evidence.ImageURL != "" {
-					userMessage += fmt.Sprintf("\n  (Image: %s)", evidence.ImageURL)
+					userMessage += fmt.Sprintf("Image: %s\n", evidence.ImageURL)
 				}
+				userMessage += "----------------------------------------\n"
 			}
+
+			// Add verification logging
+			log.Printf("[MESSAGE_EVIDENCE] Added %d evidence items to message for agent %s. Total message length: %d",
+				len(evidenceDetails), agentObj.CharacterName, len(userMessage))
 		}
 	}
 
