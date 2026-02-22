@@ -202,16 +202,42 @@ func MessageHandler(w http.ResponseWriter, r *http.Request) {
 	originalLocationCount := len(aiResponse.RevealedLocations)
 
 	aiResponse.RevealedEvidences = validateRevealedItems(aiResponse.RevealedEvidences, agentObj.HoldsEvidenceIDs)
-	aiResponse.RevealedLocations = validateRevealedItems(aiResponse.RevealedLocations, agentObj.KnowsLocationIDs)
+
+	// Use location detector instead of validation against KnowsLocationIDs
+	storyObjID, err := primitive.ObjectIDFromHex(agentObj.StoryID)
+	if err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		var story models.Story
+		collection := db.GetCollection("stories")
+		err = collection.FindOne(ctx, bson.M{"_id": storyObjID}).Decode(&story)
+
+		if err == nil {
+			// Use location detector as sole source of location reveals
+			detector := NewLocationRevealDetector(&story)
+			aiResponse.RevealedLocations = detector.DetectRevealedLocations(aiResponse.Reply)
+
+			log.Printf("[MESSAGE_LOCATION_DETECTION] Agent %s - Detector found locations: %v",
+				agentObj.CharacterName, aiResponse.RevealedLocations)
+		} else {
+			log.Printf("[MESSAGE_ERROR] Failed to fetch story for location detection: %v", err)
+			aiResponse.RevealedLocations = []string{}
+		}
+	} else {
+		log.Printf("[MESSAGE_ERROR] Invalid story ID for location detection: %v", err)
+		aiResponse.RevealedLocations = []string{}
+	}
 
 	// Log if items were filtered
 	if len(aiResponse.RevealedEvidences) < originalEvidenceCount {
 		log.Printf("[MESSAGE_VALIDATION] Filtered out %d invalid evidence reveals for %s",
 			originalEvidenceCount-len(aiResponse.RevealedEvidences), agentObj.CharacterName)
 	}
-	if len(aiResponse.RevealedLocations) < originalLocationCount {
-		log.Printf("[MESSAGE_VALIDATION] Filtered out %d invalid location reveals for %s",
-			originalLocationCount-len(aiResponse.RevealedLocations), agentObj.CharacterName)
+	// Log detected locations vs. AI provided locations (for debugging)
+	if originalLocationCount != len(aiResponse.RevealedLocations) {
+		log.Printf("[MESSAGE_LOCATION_DETECTION] Agent %s - AI provided %d locations, detector found %d locations",
+			agentObj.CharacterName, originalLocationCount, len(aiResponse.RevealedLocations))
 	}
 
 	// Update tracking
@@ -245,8 +271,7 @@ func retryWithJSONFormat(ctx context.Context, agent *agent.Agent, history []*gen
 		`Please respond in valid JSON format:
 {
   "reply": "your spoken dialogue with [actions] in brackets",
-  "revealed_evidences": ["evidence IDs you're giving"],
-  "revealed_locations": ["location IDs you're granting access to"]
+  "revealed_evidences": ["evidence IDs you're giving"]
 }`, genai.RoleUser)
 
 	retryHistory := append(history, clarification)
