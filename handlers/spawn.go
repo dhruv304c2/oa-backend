@@ -118,7 +118,7 @@ func SpawnAgentHandler(w http.ResponseWriter, r *http.Request) {
 		defer cancel()
 
 		// For system prompts, full content has everything but client content is empty (hidden)
-		if err := db.SaveConversationMessageWithVersions(ctx, agentID, content, "", "model", 0); err != nil {
+		if err := db.SaveConversationMessageWithVersions(ctx, agentID, content, "", "model", 0, nil, nil); err != nil {
 			log.Printf("Failed to persist initial system prompt: %v", err)
 		} else {
 			log.Printf("[SPAWN_SUCCESS] Saved initial system prompt for agent %s", character.Name)

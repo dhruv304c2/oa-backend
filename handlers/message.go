@@ -128,7 +128,7 @@ func MessageHandler(w http.ResponseWriter, r *http.Request) {
 		// Extract clean version for client
 		clientContent := extractClientContent(fullContent, "user")
 
-		if err := db.SaveConversationMessageWithVersions(ctx, agentID, fullContent, clientContent, "user", index); err != nil {
+		if err := db.SaveConversationMessageWithVersions(ctx, agentID, fullContent, clientContent, "user", index, nil, nil); err != nil {
 			log.Printf("Failed to persist user message: %v", err)
 		}
 	}(req.AgentID, userMessage, len(agentObj.History)-1)
@@ -251,15 +251,15 @@ func MessageHandler(w http.ResponseWriter, r *http.Request) {
 	agentObj.History = append(agentObj.History, genai.NewContentFromText(aiResponse.Reply, genai.RoleModel))
 
 	// Save AI response asynchronously with both versions
-	go func(agentID, processedContent string, index int) {
+	go func(agentID, processedContent, naturalContent string, revealedEvidences []string, revealedLocations []string, index int) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		// For single-step process, processed content is the only content we have
-		if err := db.SaveConversationMessageWithVersions(ctx, agentID, processedContent, processedContent, "model", index); err != nil {
+		// For AI responses, natural response is the full content, processed is the client content
+		if err := db.SaveConversationMessageWithVersions(ctx, agentID, naturalContent, processedContent, "model", index, revealedEvidences, revealedLocations); err != nil {
 			log.Printf("Failed to persist AI response: %v", err)
 		}
-	}(req.AgentID, aiResponse.Reply, len(agentObj.History)-1)
+	}(req.AgentID, aiResponse.Reply, naturalResponse, aiResponse.RevealedEvidences, aiResponse.RevealedLocations, len(agentObj.History)-1)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(aiResponse)
