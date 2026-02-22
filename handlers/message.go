@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"agent/agent"
+	"agent/config"
 	"agent/db"
 	"agent/models"
 	"context"
@@ -9,7 +10,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -106,7 +106,7 @@ CRITICAL: If a character mentions a location/evidence not in their possession li
 	defer cancel()
 
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
-		APIKey: os.Getenv("GEMINI_API_KEY"),
+		APIKey: config.GetGeminiAPIKey(),
 	})
 	if err != nil {
 		return nil, err
@@ -116,7 +116,7 @@ CRITICAL: If a character mentions a location/evidence not in their possession li
 		ResponseMIMEType: "application/json",
 	}
 
-	resp, err := client.Models.GenerateContent(ctx, "gemini-2.5-flash",
+	resp, err := client.Models.GenerateContent(ctx, config.GetGeminiModel(),
 		[]*genai.Content{genai.NewContentFromText(analysisPrompt, genai.RoleUser)},
 		genConfig)
 	if err != nil {
@@ -246,7 +246,7 @@ func MessageHandler(w http.ResponseWriter, r *http.Request) {
 	// Create Gemini client
 	ctx := context.Background()
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
-		APIKey: os.Getenv("GEMINI_API_KEY"),
+		APIKey: config.GetGeminiAPIKey(),
 	})
 	if err != nil {
 		log.Printf("[MESSAGE_ERROR] Failed to create Gemini client for agent %s: %v", agentObj.CharacterName, err)
@@ -267,7 +267,7 @@ func MessageHandler(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[MESSAGE_DEBUG] Calling Gemini for agent %s with history length: %d",
 		agentObj.CharacterName, len(validHistory))
-	resp, err := client.Models.GenerateContent(ctx, "gemini-2.5-flash", validHistory, nil) // No genConfig with JSON format
+	resp, err := client.Models.GenerateContent(ctx, config.GetGeminiModel(), validHistory, nil) // No genConfig with JSON format
 	if err != nil {
 		log.Printf("[MESSAGE_ERROR] Failed to get Gemini response for agent %s: %v", agentObj.CharacterName, err)
 		log.Printf("[MESSAGE_DEBUG] Valid history length: %d (original: %d)", len(validHistory), len(agentObj.History))
@@ -630,7 +630,7 @@ Return JSON format:
 	defer cancel()
 
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
-		APIKey: os.Getenv("GEMINI_API_KEY"),
+		APIKey: config.GetGeminiAPIKey(),
 	})
 	if err != nil {
 		return nil, err
@@ -645,7 +645,7 @@ Return JSON format:
 	log.Printf("[VERIFY_PROMPT] Agent %s - Sending verification prompt (length: %d chars)", agent.CharacterName, promptLength)
 
 	startTime := time.Now()
-	resp, err := client.Models.GenerateContent(ctx, "gemini-2.5-flash",
+	resp, err := client.Models.GenerateContent(ctx, config.GetGeminiModel(),
 		[]*genai.Content{genai.NewContentFromText(verifyPrompt, genai.RoleUser)},
 		genConfig)
 	if err != nil {
@@ -764,7 +764,7 @@ Modified response:`,
 	// Create Gemini client
 	ctx := context.Background()
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
-		APIKey: os.Getenv("GEMINI_API_KEY"),
+		APIKey: config.GetGeminiAPIKey(),
 	})
 	if err != nil {
 		log.Printf("[MODIFY_CLIENT_FAIL] Agent %s - Failed to create Gemini client: %v", agent.CharacterName, err)
@@ -774,7 +774,7 @@ Modified response:`,
 	log.Printf("[MODIFY_API_CALL] Agent %s - Calling Gemini to rewrite dialogue", agent.CharacterName)
 	startTime := time.Now()
 
-	resp, err := client.Models.GenerateContent(ctx, "gemini-2.5-flash",
+	resp, err := client.Models.GenerateContent(ctx, config.GetGeminiModel(),
 		[]*genai.Content{genai.NewContentFromText(modPrompt, genai.RoleUser)},
 		nil)
 	if err != nil {

@@ -1,13 +1,13 @@
 package handlers
 
 import (
+	"agent/config"
 	"agent/db"
 	"agent/models"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -88,7 +88,7 @@ func ScoreTheoryHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Create Gemini client
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
-		APIKey: os.Getenv("GEMINI_API_KEY"),
+		APIKey: config.GetGeminiAPIKey(),
 	})
 	if err != nil {
 		http.Error(w, "Failed to create AI client", http.StatusInternalServerError)
@@ -139,7 +139,7 @@ Be fair but precise in scoring. If they got the main culprit wrong, they cannot 
 	}
 
 	// Get AI response
-	resp, err := client.Models.GenerateContent(ctx, "gemini-2.5-flash",
+	resp, err := client.Models.GenerateContent(ctx, config.GetGeminiModel(),
 		[]*genai.Content{genai.NewContentFromText(prompt, genai.RoleUser)},
 		genConfig)
 	if err != nil {
