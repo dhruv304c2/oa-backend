@@ -30,11 +30,12 @@ func CreateAgent(ctx context.Context, agent *models.AgentDocument) (primitive.Ob
 // SaveConversationMessage saves a single message - wrapper for backward compatibility
 func SaveConversationMessage(ctx context.Context, agentID string, content string, role string, index int) error {
 	// For backward compatibility, use same content for both versions
-	return SaveConversationMessageWithVersions(ctx, agentID, content, content, role, index)
+	return SaveConversationMessageWithVersions(ctx, agentID, content, content, role, index, nil, nil)
 }
 
-// SaveConversationMessageWithVersions saves a message with both full and client versions
-func SaveConversationMessageWithVersions(ctx context.Context, agentID string, fullContent string, clientContent string, role string, index int) error {
+// SaveConversationMessageWithVersions saves a message with both full and client versions.
+// NOTE: This version does not store any reveal metadata.
+func SaveConversationMessageWithVersions(ctx context.Context, agentID string, fullContent string, clientContent string, role string, index int, revealedEvidences []string, revealedlocations []string) error {
 	// Skip empty messages - they cause Gemini API errors
 	if strings.TrimSpace(fullContent) == "" && strings.TrimSpace(clientContent) == "" {
 		log.Printf("[SAVE_MESSAGE_SKIP] Skipping empty message for agent %s at index %d", agentID, index)
@@ -47,12 +48,14 @@ func SaveConversationMessageWithVersions(ctx context.Context, agentID string, fu
 	}
 
 	doc := models.ConversationDocument{
-		AgentID:       objID,
-		Role:          role,
-		Content:       fullContent,
-		ClientContent: clientContent,
-		Timestamp:     time.Now(),
-		Index:         index,
+		AgentID:           objID,
+		Role:              role,
+		Content:           fullContent,
+		ClientContent:     clientContent,
+		Timestamp:         time.Now(),
+		Index:             index,
+		RevealedEvidences: revealedEvidences,
+		RevealedLocations: revealedlocations,
 	}
 
 	collection := GetCollection("conversations")
