@@ -11,6 +11,8 @@ import (
 
 	"agent/db"
 	dbModels "agent/db/models"
+	"agent/models"
+	"agent/prompts"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -215,45 +217,79 @@ func LoadAgentFromDatabase(agentID string) (*Agent, error) {
 			role = genai.RoleModel
 		}
 
-		// Log for debugging
-		contentLength := len(conv.Content)
-		log.Printf("[AGENT_LOAD_HISTORY] Message %d: Role=%s, Index=%d, Length=%d", i, conv.Role, conv.Index, contentLength)
+		// Check if this is the system prompt (first model message)
+		if i == 0 && conv.Role == "model" && conv.Index == 0 {
+			log.Printf("[AGENT_LOAD_REGEN] Regenerating system prompt for agent %s", agentDoc.CharacterName)
 
-		agent.History = append(agent.History, genai.NewContentFromText(conv.Content, role))
-	}
+			// Fetch the story
+			var story models.Story
+			storyCollection := db.GetCollection("stories")
+			err := storyCollection.FindOne(ctx, bson.M{"_id": agentDoc.StoryID}).Decode(&story)
+			if err != nil {
+				log.Printf("[AGENT_LOAD_REGEN_ERROR] Failed to fetch story: %v. Using existing prompt.", err)
+				agent.History = append(agent.History, genai.NewContentFromText(conv.Content, role))
+				continue
+			}
 
-	log.Printf("[AGENT_LOAD_SUCCESS] Loaded agent %s with %d conversation messages", agentDoc.CharacterName, len(agent.History))
+			// Find the character
+			var character *models.Character
+			for _, char := range story.Story.Characters {
+				if char.ID == agentDoc.CharacterID {
+					character = &char
+					break
+				}
+			}
 
-	// Check if the first message is a system/model message
-	// Gemini expects conversations to start with either user or model, but having a proper context is important
-	hasSystemMessage := false
-	if len(conversations) > 0 && len(agent.History) > 0 {
-		// Check if first message looks like a system prompt (usually longer and from model)
-		firstMsg := conversations[0]
-		if firstMsg.Role == "model" && firstMsg.Index == 0 {
-			hasSystemMessage = true
+			if character == nil {
+				log.Printf("[AGENT_LOAD_REGEN_ERROR] Character %s not found. Using existing prompt.", agentDoc.CharacterID)
+				agent.History = append(agent.History, genai.NewContentFromText(conv.Content, role))
+				continue
+			}
+
+			// Generate fresh system prompt using the existing function
+			systemPrompt, _ := prompts.ConstructCharacterSystemPrompt(character, &story)
+
+			// Add story context as done during spawn
+			fullSystemPrompt := fmt.Sprintf("%s\n\n[STORY CONTEXT FOR REFERENCE]:\n%s",
+				systemPrompt, story.Story.FullStory)
+
+			// Use the regenerated prompt
+			agent.History = append(agent.History, genai.NewContentFromText(fullSystemPrompt, role))
+
+			// Update in database asynchronously
+			go func(agentID primitive.ObjectID, newPrompt string) {
+				updateCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+
+				filter := bson.M{
+					"agent_id": agentID,
+					"index": 0,
+					"role": "model",
+				}
+				update := bson.M{
+					"$set": bson.M{
+						"content": newPrompt,
+						"updated_at": time.Now(),
+					},
+				}
+
+				conversationCollection := db.GetCollection("conversations")
+				_, err := conversationCollection.UpdateOne(updateCtx, filter, update)
+				if err != nil {
+					log.Printf("[AGENT_LOAD_REGEN_DB] Failed to update system prompt in DB: %v", err)
+				} else {
+					log.Printf("[AGENT_LOAD_REGEN_DB] Successfully updated system prompt in database")
+				}
+			}(agentDoc.ID, fullSystemPrompt)
+
+			log.Printf("[AGENT_LOAD_REGEN_SUCCESS] Regenerated system prompt for agent %s", agentDoc.CharacterName)
+		} else {
+			// Regular message, append as normal
+			agent.History = append(agent.History, genai.NewContentFromText(conv.Content, role))
 		}
 	}
 
-	// If no system message or empty history, add a more comprehensive one
-	if !hasSystemMessage || len(agent.History) == 0 {
-		// Build a system message for recovered agents
-		systemMessage := fmt.Sprintf(`You are %s with personality: %s.
-
-IMPORTANT: Only provide spoken dialogue - what your character says out loud. Do NOT include action descriptions like "I sigh" or narration. Simply speak as your character would speak.
-
-Continue the conversation naturally based on your character. Stay in character and respond as your character would.
-
-[Note: This agent was loaded from database after server restart. Continue conversation based on available history.]`,
-			agent.CharacterName, agent.Personality)
-
-		// Prepend system message to maintain proper conversation flow
-		newHistory := []*genai.Content{genai.NewContentFromText(systemMessage, genai.RoleModel)}
-		agent.History = append(newHistory, agent.History...)
-
-		log.Printf("[AGENT_LOAD_INFO] Added/prepended system message for agent %s (had system: %v)",
-			agentDoc.CharacterName, hasSystemMessage)
-	}
+	log.Printf("[AGENT_LOAD_SUCCESS] Loaded agent %s with %d conversation messages", agentDoc.CharacterName, len(agent.History))
 
 	return agent, nil
 }
