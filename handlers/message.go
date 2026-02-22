@@ -206,9 +206,6 @@ func MessageHandler(w http.ResponseWriter, r *http.Request) {
 	// Use location detector instead of validation against KnowsLocationIDs
 	storyObjID, err := primitive.ObjectIDFromHex(agentObj.StoryID)
 	if err == nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
 		var story models.Story
 		collection := db.GetCollection("stories")
 		err = collection.FindOne(ctx, bson.M{"_id": storyObjID}).Decode(&story)
