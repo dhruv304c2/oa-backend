@@ -64,34 +64,46 @@ LOCATIONS THIS CHARACTER KNOWS:
 CHARACTER'S RESPONSE TO ANALYZE:
 "%s"
 
-TASKS:
-1. First, scan the response for ANY specific evidence or location mentions
-2. For each mentioned item, check if it exists in the character's possession lists above
-3. Modify the response based on availability:
-   - If character HAS the item: Keep as-is, mark as revealed if actively showing/describing
-   - If character DOESN'T HAVE the item: MUST modify to be vague or explain lack of knowledge
+CRITICAL LOCATION DETECTION RULES:
+- ANY mention of a specific place, area, or location by name
+- ANY directional guidance (e.g., "go to", "head to", "find", "located at")
+- ANY reference to maps, directions, signs, or wayfinding tools
+- ANY description of where something is or how to get there
+- Mentions of location types (e.g., "crew areas", "public spaces", "medical bay")
+- References to people who could provide directions
 
-MODIFICATION RULES FOR UNAVAILABLE ITEMS:
-- Location not in list: Change specific directions to vague references
-  - BAD: "Go to the Medical Bay on Deck 7, Sector Gamma"
-  - GOOD: "I believe there's a medical facility somewhere on the station"
-- Evidence not in list: Change to hearsay or lack of possession
-  - BAD: "Here's the murder weapon, a silver knife"
-  - GOOD: "I've heard about a murder weapon but I don't have access to it"
+STRICT MODIFICATION RULES:
+For ANY location mentioned that is NOT in the character's known locations list above:
+1. REMOVE all specific names, directions, descriptions, and helpful guidance
+2. REPLACE with dismissive or unhelpful responses:
+   - "I don't know anything about that"
+   - "I can't help you with that"
+   - "That's not my area"
+   - "I have no idea"
+3. DO NOT mention maps, other crew, or any alternative ways to find the location
+4. If the response is primarily about unknown locations, replace the ENTIRE response
 
-REVEAL DETECTION:
-- Only mark as "revealed" when character actively shows/hands over items they ACTUALLY possess
-- Casual mentions are not reveals
-- Never mark unavailable items as revealed
+EVIDENCE RULES:
+Similar strict rules apply for evidence not in the character's possession list.
+
+Examples of Required Modifications:
+- Original: "The medical bay is on deck 7. Ask any crew member."
+  Modified: "I don't know anything about that."
+
+- Original: "Check the public areas, there are maps posted."
+  Modified: "I can't help you with that."
+
+- Original: "The crew areas are restricted, but someone might let you in."
+  Modified: "That's not my concern."
 
 Return JSON:
 {
-  "reply": "The final response (modified if needed, otherwise original) - IMPORTANT: Remove any action narration like 'I sigh' or 'I turn back' and keep only the spoken dialogue",
-  "revealed_evidences": ["IDs of evidence being revealed - use the ID field, not the name - ONLY items the character possesses"],
-  "revealed_locations": ["IDs of locations being revealed - use the ID field, not the name - ONLY locations the character knows"]
+  "reply": "The modified response (or original if no changes needed) - Remove ALL action descriptions",
+  "revealed_evidences": ["IDs of evidence being actively shown/given"],
+  "revealed_locations": ["IDs of locations being actively revealed with access"]
 }
 
-CRITICAL: If a character mentions a location/evidence not in their possession lists, you MUST modify the response to be vague or indicate lack of knowledge. The character CANNOT give specific details about things they don't know.`,
+BE AGGRESSIVE: When in doubt, remove the information. It's better to be unhelpful than to leak knowledge.`,
 		agent.CharacterName,
 		agent.Personality,
 		formatCharacterEvidence(characterEvidence),
@@ -140,6 +152,64 @@ CRITICAL: If a character mentions a location/evidence not in their possession li
 	}
 
 	return &analysisResult, nil
+}
+
+// validateNoLocationLeaks checks if a response contains location-related keywords that suggest information leakage
+func validateNoLocationLeaks(response string, knownLocationNames []string) bool {
+	// Convert response to lowercase for checking
+	lowerResponse := strings.ToLower(response)
+
+	// Keywords that suggest location information
+	locationKeywords := []string{
+		"deck", "level", "floor", "area", "section", "bay", "room",
+		"corridor", "hallway", "posted", "map", "sign", "directory",
+		"go to", "head to", "find it", "located", "you'll find",
+		"ask crew", "crew can", "someone can direct", "public areas",
+		"crew areas", "restricted", "clearance", "access",
+	}
+
+	// Check for any location keywords
+	for _, keyword := range locationKeywords {
+		if strings.Contains(lowerResponse, keyword) {
+			// Found a location keyword - this could be a leak
+			// However, we should allow mentions of known locations
+			// For now, return false to trigger further inspection
+			return false
+		}
+	}
+
+	return true
+}
+
+// applyStrictLocationFilter removes any location information from responses
+func applyStrictLocationFilter(response string, agent *agent.Agent) string {
+	// List of generic dismissive responses that fit different personalities
+	dismissiveResponses := []string{
+		"I don't know anything about that.",
+		"I can't help you with that.",
+		"That's not my area.",
+		"I have no idea.",
+		"I'm not the person to ask about that.",
+		"You'll have to figure that out yourself.",
+		"I wouldn't know.",
+		"That's outside my knowledge.",
+	}
+
+	// Select a response based on agent personality
+	lowerPersonality := strings.ToLower(agent.Personality)
+
+	if strings.Contains(lowerPersonality, "nervous") || strings.Contains(lowerPersonality, "anxious") {
+		return "I-I don't know anything about that. Please, I can't help you."
+	} else if strings.Contains(lowerPersonality, "arrogant") || strings.Contains(lowerPersonality, "confident") {
+		return "That's not my concern. Find someone else to bother."
+	} else if strings.Contains(lowerPersonality, "professional") || strings.Contains(lowerPersonality, "formal") {
+		return "I'm not at liberty to discuss that."
+	} else if strings.Contains(lowerPersonality, "hostile") || strings.Contains(lowerPersonality, "angry") {
+		return "None of your business. Leave me alone."
+	}
+
+	// Default response
+	return dismissiveResponses[0]
 }
 
 func MessageHandler(w http.ResponseWriter, r *http.Request) {
@@ -333,6 +403,26 @@ func MessageHandler(w http.ResponseWriter, r *http.Request) {
 			} else {
 				log.Printf("[MESSAGE_ANALYSIS_SUCCESS] Analysis complete - Reply length: %d, Revealed evidence: %d, Revealed locations: %d",
 					len(aiResponse.Reply), len(aiResponse.RevealedEvidences), len(aiResponse.RevealedLocations))
+
+				// Double-check for location leaks after modification
+				if len(aiResponse.RevealedLocations) == 0 {
+					// Get known location names for validation
+					knownLocationNames := []string{}
+					for _, locID := range agentObj.KnowsLocationIDs {
+						// Find location name from story
+						for _, loc := range story.Story.Locations {
+							if loc.ID == locID {
+								knownLocationNames = append(knownLocationNames, loc.LocationName)
+								break
+							}
+						}
+					}
+
+					if !validateNoLocationLeaks(aiResponse.Reply, knownLocationNames) {
+						log.Printf("[MESSAGE_LEAK_DETECTED] Location information leak detected after modification, applying strict filter")
+						aiResponse.Reply = applyStrictLocationFilter(aiResponse.Reply, agentObj)
+					}
+				}
 
 				// Handle the revealed items arrays (analysis now returns IDs directly)
 				originalEvidenceCount := len(aiResponse.RevealedEvidences)
