@@ -31,186 +31,6 @@ type MessageResponse struct {
 	RevealedLocations []string `json:"revealed_locations"`
 }
 
-// analyzeAndProcessResponse analyzes a natural language response to extract reveals and modify for unavailable items
-func analyzeAndProcessResponse(naturalResponse string, agent *agent.Agent, story *models.Story) (*MessageResponse, error) {
-	// Fetch character's evidence and locations (reuse existing functions)
-	characterEvidence, err := fetchEvidenceDetails(agent.StoryID, agent.HoldsEvidenceIDs)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch evidence: %w", err)
-	}
-
-	characterLocations, err := fetchLocationDetailsForIDs(agent.StoryID, agent.KnowsLocationIDs)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch locations: %w", err)
-	}
-
-	// Log character's possessions
-	log.Printf("[MESSAGE_ANALYSIS_DATA] Agent %s has %d evidence items and %d locations",
-		agent.CharacterName, len(characterEvidence), len(characterLocations))
-
-	// Build analysis prompt
-	analysisPrompt := fmt.Sprintf(`You are analyzing a character's dialogue response for a detective game.
-
-CHARACTER PROFILE:
-- Name: %s
-- Personality: %s
-
-EVIDENCE THIS CHARACTER POSSESSES:
-%s
-
-LOCATIONS THIS CHARACTER KNOWS:
-%s
-
-CHARACTER'S RESPONSE TO ANALYZE:
-"%s"
-
-CRITICAL LOCATION DETECTION RULES:
-- ANY mention of a specific place, area, or location by name
-- ANY directional guidance (e.g., "go to", "head to", "find", "located at")
-- ANY reference to maps, directions, signs, or wayfinding tools
-- ANY description of where something is or how to get there
-- Mentions of location types (e.g., "crew areas", "public spaces", "medical bay")
-- References to people who could provide directions
-
-STRICT MODIFICATION RULES:
-For ANY location mentioned that is NOT in the character's known locations list above:
-1. REMOVE all specific names, directions, descriptions, and helpful guidance
-2. REPLACE with dismissive or unhelpful responses:
-   - "I don't know anything about that"
-   - "I can't help you with that"
-   - "That's not my area"
-   - "I have no idea"
-3. DO NOT mention maps, other crew, or any alternative ways to find the location
-4. If the response is primarily about unknown locations, replace the ENTIRE response
-
-EVIDENCE RULES:
-Similar strict rules apply for evidence not in the character's possession list.
-
-Examples of Required Modifications:
-- Original: "The medical bay is on deck 7. Ask any crew member."
-  Modified: "I don't know anything about that."
-
-- Original: "Check the public areas, there are maps posted."
-  Modified: "I can't help you with that."
-
-- Original: "The crew areas are restricted, but someone might let you in."
-  Modified: "That's not my concern."
-
-Return JSON:
-{
-  "reply": "The modified response (or original if no changes needed) - Remove ALL action descriptions",
-  "revealed_evidences": ["IDs of evidence being actively shown/given"],
-  "revealed_locations": ["IDs of locations being actively revealed with access"]
-}
-
-BE AGGRESSIVE: When in doubt, remove the information. It's better to be unhelpful than to leak knowledge.`,
-		agent.CharacterName,
-		agent.Personality,
-		formatCharacterEvidence(characterEvidence),
-		formatCharacterLocations(characterLocations),
-		naturalResponse)
-
-	// Log the full analysis prompt
-	log.Printf("[MESSAGE_ANALYSIS_PROMPT] Full analysis prompt for %s:\n%s", agent.CharacterName, analysisPrompt)
-
-	// Create client and call Gemini
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	client, err := genai.NewClient(ctx, &genai.ClientConfig{
-		APIKey: config.GetGeminiAPIKey(),
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	genConfig := &genai.GenerateContentConfig{
-		ResponseMIMEType: "application/json",
-	}
-
-	resp, err := client.Models.GenerateContent(ctx, config.GetGeminiModel(),
-		[]*genai.Content{genai.NewContentFromText(analysisPrompt, genai.RoleUser)},
-		genConfig)
-	if err != nil {
-		return nil, err
-	}
-
-	// Log the raw analysis response
-	rawAnalysisResponse := resp.Text()
-	log.Printf("[MESSAGE_ANALYSIS_RESPONSE] Raw analysis response for %s: %s", agent.CharacterName, rawAnalysisResponse)
-
-	// Parse the analysis response
-	var analysisResult MessageResponse
-	if err := json.Unmarshal([]byte(rawAnalysisResponse), &analysisResult); err != nil {
-		return nil, fmt.Errorf("failed to parse analysis: %w", err)
-	}
-
-	// Log if the response was modified
-	if analysisResult.Reply != naturalResponse {
-		log.Printf("[MESSAGE_ANALYSIS_MODIFIED] Response was modified for %s. Original length: %d, Modified length: %d",
-			agent.CharacterName, len(naturalResponse), len(analysisResult.Reply))
-	}
-
-	return &analysisResult, nil
-}
-
-// validateNoLocationLeaks checks if a response contains location-related keywords that suggest information leakage
-func validateNoLocationLeaks(response string, knownLocationNames []string) bool {
-	// Convert response to lowercase for checking
-	lowerResponse := strings.ToLower(response)
-
-	// Keywords that suggest location information
-	locationKeywords := []string{
-		"deck", "level", "floor", "area", "section", "bay", "room",
-		"corridor", "hallway", "posted", "map", "sign", "directory",
-		"go to", "head to", "find it", "located", "you'll find",
-		"ask crew", "crew can", "someone can direct", "public areas",
-		"crew areas", "restricted", "clearance", "access",
-	}
-
-	// Check for any location keywords
-	for _, keyword := range locationKeywords {
-		if strings.Contains(lowerResponse, keyword) {
-			// Found a location keyword - this could be a leak
-			// However, we should allow mentions of known locations
-			// For now, return false to trigger further inspection
-			return false
-		}
-	}
-
-	return true
-}
-
-// applyStrictLocationFilter removes any location information from responses
-func applyStrictLocationFilter(response string, agent *agent.Agent) string {
-	// List of generic dismissive responses that fit different personalities
-	dismissiveResponses := []string{
-		"I don't know anything about that.",
-		"I can't help you with that.",
-		"That's not my area.",
-		"I have no idea.",
-		"I'm not the person to ask about that.",
-		"You'll have to figure that out yourself.",
-		"I wouldn't know.",
-		"That's outside my knowledge.",
-	}
-
-	// Select a response based on agent personality
-	lowerPersonality := strings.ToLower(agent.Personality)
-
-	if strings.Contains(lowerPersonality, "nervous") || strings.Contains(lowerPersonality, "anxious") {
-		return "I-I don't know anything about that. Please, I can't help you."
-	} else if strings.Contains(lowerPersonality, "arrogant") || strings.Contains(lowerPersonality, "confident") {
-		return "That's not my concern. Find someone else to bother."
-	} else if strings.Contains(lowerPersonality, "professional") || strings.Contains(lowerPersonality, "formal") {
-		return "I'm not at liberty to discuss that."
-	} else if strings.Contains(lowerPersonality, "hostile") || strings.Contains(lowerPersonality, "angry") {
-		return "None of your business. Leave me alone."
-	}
-
-	// Default response
-	return dismissiveResponses[0]
-}
 
 func MessageHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -324,7 +144,7 @@ func MessageHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Step 1: Get natural language response (no JSON format)
+	// Generate JSON response directly
 	// Ensure we don't have any nil entries in history
 	validHistory := make([]*genai.Content, 0, len(agentObj.History))
 	for i, content := range agentObj.History {
@@ -335,19 +155,16 @@ func MessageHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	genConfig := &genai.GenerateContentConfig{
+		ResponseMIMEType: "application/json",
+	}
+
 	log.Printf("[MESSAGE_DEBUG] Calling Gemini for agent %s with history length: %d",
 		agentObj.CharacterName, len(validHistory))
-	resp, err := client.Models.GenerateContent(ctx, config.GetGeminiModel(), validHistory, nil) // No genConfig with JSON format
+	resp, err := client.Models.GenerateContent(ctx, config.GetGeminiModel(), validHistory, genConfig)
 	if err != nil {
-		log.Printf("[MESSAGE_ERROR] Failed to get Gemini response for agent %s: %v", agentObj.CharacterName, err)
-		log.Printf("[MESSAGE_DEBUG] Valid history length: %d (original: %d)", len(validHistory), len(agentObj.History))
-		// Log history entries for debugging, especially around the error index
-		for i := range validHistory {
-			// Log more entries, especially around index 14 where the error occurred
-			if i < 3 || (i >= 13 && i <= 15) {
-				log.Printf("[MESSAGE_DEBUG] ValidHistory[%d]: Content exists", i)
-			}
-		}
+		log.Printf("[MESSAGE_ERROR] Failed to get JSON response for agent %s: %v",
+			agentObj.CharacterName, err)
 		http.Error(w, "Failed to get response", http.StatusInternalServerError)
 		return
 	}
@@ -355,25 +172,40 @@ func MessageHandler(w http.ResponseWriter, r *http.Request) {
 	// Update agentObj.History to use the validated history
 	agentObj.History = validHistory
 
-	// Get plain text response
-	naturalResponse := resp.Text()
-	log.Printf("[MESSAGE_NATURAL] Agent %s natural response: %s",
-		agentObj.CharacterName, naturalResponse)
+	// Parse JSON response
+	var aiResponse MessageResponse
+	rawResponse := resp.Text()
+	log.Printf("[MESSAGE_JSON_RAW] Agent %s raw JSON: %s", agentObj.CharacterName, rawResponse)
 
-	// Step 2: Analyze and process the natural response
-	var aiResponse *MessageResponse
+	if err := json.Unmarshal([]byte(rawResponse), &aiResponse); err != nil {
+		log.Printf("[MESSAGE_JSON_ERROR] Failed to parse JSON for %s: %v",
+			agentObj.CharacterName, err)
 
-	// Fetch the story for analysis
-	storyObjID, err := primitive.ObjectIDFromHex(agentObj.StoryID)
-	if err != nil {
-		log.Printf("[MESSAGE_ERROR] Failed to parse story ID: %v", err)
-		// Fallback to natural response with no reveals
-		aiResponse = &MessageResponse{
-			Reply:             naturalResponse,
-			RevealedEvidences: []string{},
-			RevealedLocations: []string{},
+		// Retry with format clarification
+		retryResponse, retryErr := retryWithJSONFormat(ctx, agentObj, validHistory)
+		if retryErr != nil {
+			log.Printf("[MESSAGE_RETRY_ERROR] Retry failed for %s: %v",
+				agentObj.CharacterName, retryErr)
+			// Fallback to safe response
+			aiResponse = MessageResponse{
+				Reply:             generateFallbackResponse(agentObj),
+				RevealedEvidences: []string{},
+				RevealedLocations: []string{},
+			}
+		} else {
+			aiResponse = *retryResponse
 		}
-	} else {
+	}
+
+	// Validate revealed items match character's possessions
+	originalEvidenceCount := len(aiResponse.RevealedEvidences)
+	originalLocationCount := len(aiResponse.RevealedLocations)
+
+	aiResponse.RevealedEvidences = validateRevealedItems(aiResponse.RevealedEvidences, agentObj.HoldsEvidenceIDs)
+
+	// Use location detector instead of validation against KnowsLocationIDs
+	storyObjID, err := primitive.ObjectIDFromHex(agentObj.StoryID)
+	if err == nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
@@ -381,70 +213,35 @@ func MessageHandler(w http.ResponseWriter, r *http.Request) {
 		collection := db.GetCollection("stories")
 		err = collection.FindOne(ctx, bson.M{"_id": storyObjID}).Decode(&story)
 
-		if err != nil {
-			log.Printf("[MESSAGE_ERROR] Failed to fetch story: %v", err)
-			// Fallback to natural response with no reveals
-			aiResponse = &MessageResponse{
-				Reply:             naturalResponse,
-				RevealedEvidences: []string{},
-				RevealedLocations: []string{},
-			}
+		if err == nil {
+			// Use location detector as sole source of location reveals
+			detector := NewLocationRevealDetector(&story)
+			aiResponse.RevealedLocations = detector.DetectRevealedLocations(aiResponse.Reply)
+
+			log.Printf("[MESSAGE_LOCATION_DETECTION] Agent %s - Detector found locations: %v",
+				agentObj.CharacterName, aiResponse.RevealedLocations)
 		} else {
-			// Analyze the natural response
-			aiResponse, err = analyzeAndProcessResponse(naturalResponse, agentObj, &story)
-			if err != nil {
-				log.Printf("[MESSAGE_ANALYSIS_ERROR] Failed to analyze response: %v", err)
-				// Fallback: use natural response with no reveals
-				aiResponse = &MessageResponse{
-					Reply:             naturalResponse,
-					RevealedEvidences: []string{},
-					RevealedLocations: []string{},
-				}
-			} else {
-				log.Printf("[MESSAGE_ANALYSIS_SUCCESS] Analysis complete - Reply length: %d, Revealed evidence: %d, Revealed locations: %d",
-					len(aiResponse.Reply), len(aiResponse.RevealedEvidences), len(aiResponse.RevealedLocations))
-
-				// Double-check for location leaks after modification
-				if len(aiResponse.RevealedLocations) == 0 {
-					// Get known location names for validation
-					knownLocationNames := []string{}
-					for _, locID := range agentObj.KnowsLocationIDs {
-						// Find location name from story
-						for _, loc := range story.Story.Locations {
-							if loc.ID == locID {
-								knownLocationNames = append(knownLocationNames, loc.LocationName)
-								break
-							}
-						}
-					}
-
-					if !validateNoLocationLeaks(aiResponse.Reply, knownLocationNames) {
-						log.Printf("[MESSAGE_LEAK_DETECTED] Location information leak detected after modification, applying strict filter")
-						aiResponse.Reply = applyStrictLocationFilter(aiResponse.Reply, agentObj)
-					}
-				}
-
-				// Handle the revealed items arrays (analysis now returns IDs directly)
-				originalEvidenceCount := len(aiResponse.RevealedEvidences)
-				originalLocationCount := len(aiResponse.RevealedLocations)
-
-				aiResponse.RevealedEvidences = validateRevealedItems(aiResponse.RevealedEvidences, agentObj.HoldsEvidenceIDs)
-				aiResponse.RevealedLocations = validateRevealedItems(aiResponse.RevealedLocations, agentObj.KnowsLocationIDs)
-
-				// Log if items were filtered out
-				if len(aiResponse.RevealedEvidences) < originalEvidenceCount {
-					log.Printf("[MESSAGE_VALIDATION] Filtered out %d invalid evidence reveals for %s",
-						originalEvidenceCount - len(aiResponse.RevealedEvidences), agentObj.CharacterName)
-				}
-				if len(aiResponse.RevealedLocations) < originalLocationCount {
-					log.Printf("[MESSAGE_VALIDATION] Filtered out %d invalid location reveals for %s",
-						originalLocationCount - len(aiResponse.RevealedLocations), agentObj.CharacterName)
-				}
-
-				updateAgentTracking(agentObj, aiResponse.RevealedEvidences, aiResponse.RevealedLocations)
-			}
+			log.Printf("[MESSAGE_ERROR] Failed to fetch story for location detection: %v", err)
+			aiResponse.RevealedLocations = []string{}
 		}
+	} else {
+		log.Printf("[MESSAGE_ERROR] Invalid story ID for location detection: %v", err)
+		aiResponse.RevealedLocations = []string{}
 	}
+
+	// Log if items were filtered
+	if len(aiResponse.RevealedEvidences) < originalEvidenceCount {
+		log.Printf("[MESSAGE_VALIDATION] Filtered out %d invalid evidence reveals for %s",
+			originalEvidenceCount-len(aiResponse.RevealedEvidences), agentObj.CharacterName)
+	}
+	// Log detected locations vs. AI provided locations (for debugging)
+	if originalLocationCount != len(aiResponse.RevealedLocations) {
+		log.Printf("[MESSAGE_LOCATION_DETECTION] Agent %s - AI provided %d locations, detector found %d locations",
+			agentObj.CharacterName, originalLocationCount, len(aiResponse.RevealedLocations))
+	}
+
+	// Update tracking
+	updateAgentTracking(agentObj, aiResponse.RevealedEvidences, aiResponse.RevealedLocations)
 
 	// Add the reply to history (ensure it's not empty)
 	if strings.TrimSpace(aiResponse.Reply) == "" {
@@ -466,6 +263,60 @@ func MessageHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(aiResponse)
+}
+
+// Retry function for JSON format issues
+func retryWithJSONFormat(ctx context.Context, agent *agent.Agent, history []*genai.Content) (*MessageResponse, error) {
+	clarification := genai.NewContentFromText(
+		`Please respond in valid JSON format:
+{
+  "reply": "your spoken dialogue with [actions] in brackets",
+  "revealed_evidences": ["evidence IDs you're giving"]
+}`, genai.RoleUser)
+
+	retryHistory := append(history, clarification)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	client, err := genai.NewClient(ctx, &genai.ClientConfig{
+		APIKey: config.GetGeminiAPIKey(),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	genConfig := &genai.GenerateContentConfig{
+		ResponseMIMEType: "application/json",
+	}
+
+	resp, err := client.Models.GenerateContent(ctx, config.GetGeminiModel(),
+		retryHistory, genConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	var response MessageResponse
+	if err := json.Unmarshal([]byte(resp.Text()), &response); err != nil {
+		return nil, err
+	}
+
+	return &response, nil
+}
+
+// Generate personality-appropriate fallback
+func generateFallbackResponse(agent *agent.Agent) string {
+	personality := strings.ToLower(agent.Personality)
+
+	if strings.Contains(personality, "nervous") {
+		return "I-I'm sorry, I'm having trouble understanding... Could you repeat that?"
+	} else if strings.Contains(personality, "arrogant") {
+		return "Speak clearly. I don't have time for your mumbling."
+	} else if strings.Contains(personality, "professional") {
+		return "I apologize, could you please rephrase your question?"
+	}
+
+	return "I'm having trouble understanding. Could you rephrase that?"
 }
 
 // parseAIResponse parses the JSON response from the AI
@@ -600,315 +451,9 @@ func fetchLocationDetailsForIDs(storyID string, locationIDs []string) ([]models.
 	return locations, nil
 }
 
-// buildEvidenceNameMap creates a mapping from evidence names to IDs
-func buildEvidenceNameMap(story *models.Story) map[string]string {
-	nameToID := make(map[string]string)
-	for _, char := range story.Story.Characters {
-		for _, ev := range char.HoldsEvidence {
-			nameToID[strings.ToLower(ev.Title)] = ev.ID
-		}
-	}
-	return nameToID
-}
 
-// buildLocationNameMap creates a mapping from location names to IDs
-func buildLocationNameMap(story *models.Story) map[string]string {
-	nameToID := make(map[string]string)
-	for _, loc := range story.Story.Locations {
-		nameToID[strings.ToLower(loc.LocationName)] = loc.ID
-	}
-	return nameToID
-}
 
-// mapRevealedNamesToIDs converts natural names to IDs using the mapping
-func mapRevealedNamesToIDs(names []string, nameMap map[string]string) []string {
-	var ids []string
-	for _, name := range names {
-		if id, exists := nameMap[strings.ToLower(strings.TrimSpace(name))]; exists {
-			ids = append(ids, id)
-		}
-	}
-	return ids
-}
 
-// formatCharacterEvidence formats evidence items for the verification prompt
-func formatCharacterEvidence(evidence []models.Evidence) string {
-	if len(evidence) == 0 {
-		return "No evidence items"
-	}
-
-	var formatted []string
-	for _, e := range evidence {
-		formatted = append(formatted, fmt.Sprintf("- [ID: %s] %s: %s", e.ID, e.Title, e.Description))
-	}
-	return strings.Join(formatted, "\n")
-}
-
-// formatCharacterLocations formats locations for the verification prompt
-func formatCharacterLocations(locations []models.Location) string {
-	if len(locations) == 0 {
-		return "No known locations"
-	}
-
-	var formatted []string
-	for _, l := range locations {
-		formatted = append(formatted, fmt.Sprintf("- [ID: %s] %s: %s", l.ID, l.LocationName, l.VisualDescription))
-	}
-	return strings.Join(formatted, "\n")
-}
-
-// verifyDialogueAgainstCharacterKnowledge verifies dialogue mentions against character's actual knowledge
-func verifyDialogueAgainstCharacterKnowledge(dialogue string, agent *agent.Agent, story *models.Story) (*ExtractedMentions, error) {
-	// Log verification start
-	log.Printf("[VERIFY_START] Agent %s - Starting verification with %d known locations, %d held evidence",
-		agent.CharacterName, len(agent.KnowsLocationIDs), len(agent.HoldsEvidenceIDs))
-
-	// Fetch character's evidence details
-	characterEvidence, err := fetchEvidenceDetails(agent.StoryID, agent.HoldsEvidenceIDs)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch evidence details: %w", err)
-	}
-	log.Printf("[VERIFY_DATA] Agent %s - Fetched %d evidence items", agent.CharacterName, len(characterEvidence))
-
-	// Fetch character's location details
-	characterLocations, err := fetchLocationDetailsForIDs(agent.StoryID, agent.KnowsLocationIDs)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch location details: %w", err)
-	}
-	log.Printf("[VERIFY_DATA] Agent %s - Fetched %d location details", agent.CharacterName, len(characterLocations))
-
-	// Build verification prompt with only character's items
-	verifyPrompt := fmt.Sprintf(`You are verifying dialogue consistency for a character.
-
-CHARACTER PROFILE:
-- Name: %s
-- Personality: %s
-
-EVIDENCE THIS CHARACTER POSSESSES:
-%s
-
-LOCATIONS THIS CHARACTER KNOWS:
-%s
-
-DIALOGUE TO VERIFY:
-"%s"
-
-TASK: Identify any evidence items or locations mentioned in the dialogue that are NOT in the character's possession/knowledge lists above.
-
-Important:
-- Only flag items explicitly mentioned or clearly referenced
-- Consider the character's personality when interpreting ambiguous references
-- Be precise about what was actually said
-
-Return JSON format:
-{
-  "unavailable_evidence": [
-    {"name": "exact item name mentioned", "context": "the sentence where it was mentioned"}
-  ],
-  "unavailable_locations": [
-    {"name": "exact location name mentioned", "context": "the sentence where it was mentioned"}
-  ]
-}`,
-		agent.CharacterName,
-		agent.Personality,
-		formatCharacterEvidence(characterEvidence),
-		formatCharacterLocations(characterLocations),
-		dialogue)
-
-	// Create Gemini client with longer timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-
-	client, err := genai.NewClient(ctx, &genai.ClientConfig{
-		APIKey: config.GetGeminiAPIKey(),
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	genConfig := &genai.GenerateContentConfig{
-		ResponseMIMEType: "application/json",
-	}
-
-	// Log prompt size for monitoring
-	promptLength := len(verifyPrompt)
-	log.Printf("[VERIFY_PROMPT] Agent %s - Sending verification prompt (length: %d chars)", agent.CharacterName, promptLength)
-
-	startTime := time.Now()
-	resp, err := client.Models.GenerateContent(ctx, config.GetGeminiModel(),
-		[]*genai.Content{genai.NewContentFromText(verifyPrompt, genai.RoleUser)},
-		genConfig)
-	if err != nil {
-		log.Printf("[VERIFY_API_FAIL] Agent %s - Gemini API error after %v: %v", agent.CharacterName, time.Since(startTime), err)
-		return nil, err
-	}
-
-	log.Printf("[VERIFY_API_SUCCESS] Agent %s - Gemini response received in %v", agent.CharacterName, time.Since(startTime))
-
-	// Parse the response
-	var verifyResponse struct {
-		UnavailableEvidence []struct {
-			Name    string `json:"name"`
-			Context string `json:"context"`
-		} `json:"unavailable_evidence"`
-		UnavailableLocations []struct {
-			Name    string `json:"name"`
-			Context string `json:"context"`
-		} `json:"unavailable_locations"`
-	}
-
-	responseText := resp.Text()
-	log.Printf("[VERIFY_RESPONSE_RAW] Agent %s - Raw response: %s", agent.CharacterName, responseText)
-
-	err = json.Unmarshal([]byte(responseText), &verifyResponse)
-	if err != nil {
-		log.Printf("[VERIFY_PARSE_FAIL] Agent %s - Failed to parse JSON response: %v", agent.CharacterName, err)
-		return nil, err
-	}
-
-	log.Printf("[VERIFY_PARSE_SUCCESS] Agent %s - Found %d unavailable evidence, %d unavailable locations",
-		agent.CharacterName, len(verifyResponse.UnavailableEvidence), len(verifyResponse.UnavailableLocations))
-
-	// Convert to ExtractedMentions format with IDs
-	mentions := &ExtractedMentions{
-		Locations: []MentionedItem{},
-		Evidence:  []MentionedItem{},
-	}
-
-	// Build maps for name->ID lookup
-	locationNameMap := buildLocationNameMap(story)
-	evidenceNameMap := buildEvidenceNameMap(story)
-
-	// Process unavailable locations
-	for _, loc := range verifyResponse.UnavailableLocations {
-		if id, exists := locationNameMap[strings.ToLower(strings.TrimSpace(loc.Name))]; exists {
-			mentions.Locations = append(mentions.Locations, MentionedItem{
-				Name:    loc.Name,
-				ID:      id,
-				Context: loc.Context,
-			})
-		}
-	}
-
-	// Process unavailable evidence
-	for _, ev := range verifyResponse.UnavailableEvidence {
-		if id, exists := evidenceNameMap[strings.ToLower(strings.TrimSpace(ev.Name))]; exists {
-			mentions.Evidence = append(mentions.Evidence, MentionedItem{
-				Name:    ev.Name,
-				ID:      id,
-				Context: ev.Context,
-			})
-		}
-	}
-
-	return mentions, nil
-}
-
-// OLD extractMentionsFromDialogue - Deprecated in favor of verifyDialogueAgainstCharacterKnowledge
-// This function was causing timeouts because it sent ALL story locations and evidence to Gemini.
-// The new verification approach only sends character-specific items, reducing prompt size by ~90%.
-
-// modifyDialogueForUnavailableItems adjusts dialogue to explain unavailable items
-func modifyDialogueForUnavailableItems(
-	originalDialogue string,
-	unavailableLocations []MentionedItem,
-	unavailableEvidence []MentionedItem,
-	agent *agent.Agent) (string, error) {
-
-	if len(unavailableLocations) == 0 && len(unavailableEvidence) == 0 {
-		log.Printf("[MODIFY_SKIP] Agent %s - No items to modify", agent.CharacterName)
-		return originalDialogue, nil
-	}
-
-	log.Printf("[MODIFY_START] Agent %s - Modifying dialogue for %d locations, %d evidence",
-		agent.CharacterName, len(unavailableLocations), len(unavailableEvidence))
-
-	// Create modification prompt
-	modPrompt := fmt.Sprintf(`You are %s with personality: %s
-
-Your response mentions some locations/evidence you cannot actually provide access to:
-
-Unavailable Locations (you know about them but can't grant access):
-%s
-
-Unavailable Evidence (you know about them but don't possess them):
-%s
-
-Modify your response to acknowledge these items while explaining why you can't provide them. Stay in character and maintain conversation flow.
-
-Guidelines:
-- For locations: Explain you know about them but can't grant access (no clearance, don't know the way, it's restricted, etc.)
-- For evidence: Mention you've heard about it but don't have it (suggest others might, lost it, never had it, etc.)
-- Keep modifications natural and brief
-- Maintain your personality and speaking style
-
-Original response: "%s"
-
-Modified response:`,
-		agent.CharacterName,
-		agent.Personality,
-		formatUnavailableItems(unavailableLocations),
-		formatUnavailableItems(unavailableEvidence),
-		originalDialogue)
-
-	// Create Gemini client
-	ctx := context.Background()
-	client, err := genai.NewClient(ctx, &genai.ClientConfig{
-		APIKey: config.GetGeminiAPIKey(),
-	})
-	if err != nil {
-		log.Printf("[MODIFY_CLIENT_FAIL] Agent %s - Failed to create Gemini client: %v", agent.CharacterName, err)
-		return originalDialogue, err
-	}
-
-	log.Printf("[MODIFY_API_CALL] Agent %s - Calling Gemini to rewrite dialogue", agent.CharacterName)
-	startTime := time.Now()
-
-	resp, err := client.Models.GenerateContent(ctx, config.GetGeminiModel(),
-		[]*genai.Content{genai.NewContentFromText(modPrompt, genai.RoleUser)},
-		nil)
-	if err != nil {
-		log.Printf("[MODIFY_API_FAIL] Agent %s - Failed to modify dialogue after %v: %v", agent.CharacterName, time.Since(startTime), err)
-		return originalDialogue, err
-	}
-
-	modifiedDialogue := resp.Text()
-	log.Printf("[MODIFY_API_SUCCESS] Agent %s - Dialogue modified successfully in %v", agent.CharacterName, time.Since(startTime))
-	log.Printf("[MODIFY_LENGTH] Agent %s - Original: %d chars, Modified: %d chars",
-		agent.CharacterName, len(originalDialogue), len(modifiedDialogue))
-
-	return modifiedDialogue, nil
-}
-
-// getLocationNames and getEvidenceNames removed - no longer needed with the new verification approach
-
-// findUnavailableLocations and findUnavailableEvidence are no longer needed
-// The new verifyDialogueAgainstCharacterKnowledge function directly returns unavailable items
-
-func formatUnavailableItems(items []MentionedItem) string {
-	if len(items) == 0 {
-		return "None"
-	}
-
-	var formatted []string
-	for _, item := range items {
-		formatted = append(formatted, fmt.Sprintf("- %s (mentioned in: \"%s\")", item.Name, item.Context))
-	}
-	return strings.Join(formatted, "\n")
-}
-
-// ExtractedMentions holds items mentioned in dialogue with their context
-type ExtractedMentions struct {
-	Locations []MentionedItem `json:"locations"`
-	Evidence  []MentionedItem `json:"evidence"`
-}
-
-// MentionedItem represents an item mentioned in dialogue
-type MentionedItem struct {
-	Name    string `json:"name"`
-	ID      string `json:"id"`
-	Context string `json:"context"` // Surrounding text for modification
-}
 
 
 
