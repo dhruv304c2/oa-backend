@@ -21,7 +21,7 @@ import (
 type MessageRequest struct {
 	AgentID           string   `json:"agent_id"`
 	Message           string   `json:"message"`
-	PresentedEvidence []string `json:"presented_evidence,omitempty"`
+	PresentedEvidence []string `json:"presented_evidence_ids,omitempty"`
 	LocationID        string   `json:"location_id,omitempty"`
 }
 

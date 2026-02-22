@@ -167,7 +167,7 @@ Send a message to an agent and receive their response.
 {
   "agent_id": "agent-173413",
   "message": "What do you know about the victim?",
-  "presented_evidence": ["evid_2", "evid_6"],  // optional
+  "presented_evidence_ids": ["evid_2", "evid_6"],  // optional
   "location_id": "loc_1"  // optional
 }
 ```
@@ -182,7 +182,7 @@ Send a message to an agent and receive their response.
 ```
 
 **Notes:**
-- `presented_evidence`: Optional array of evidence IDs to show to the character
+- `presented_evidence_ids`: Optional array of evidence IDs to show to the character
 - `location_id`: Optional location ID to set the context of where the conversation is happening
 - `revealed_evidences`: Evidence IDs the character reveals in their response
 - `revealed_locations`: Location IDs the character mentions in their response
@@ -275,7 +275,7 @@ curl -X POST http://localhost:8080/message \
     -d '{
       "agent_id": "agent-173413",
       "message": "Do you recognize this item?",
-      "presented_evidence": ["evid_2"],
+      "presented_evidence_ids": ["evid_2"],
       "location_id": "loc_6"
     }'
 ```
