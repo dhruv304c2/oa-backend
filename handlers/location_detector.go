@@ -1,10 +1,15 @@
 package handlers
 
 import (
+	"agent/config"
 	"agent/models"
+	"context"
+	"encoding/json"
+	"fmt"
 	"log"
-	"regexp"
-	"strings"
+	"time"
+
+	"google.golang.org/genai"
 )
 
 // LocationRevealDetector analyzes dialogue to detect location reveals
@@ -19,162 +24,87 @@ func NewLocationRevealDetector(story *models.Story) *LocationRevealDetector {
 	}
 }
 
-// DetectRevealedLocations analyzes dialogue and returns location IDs that are being revealed
+// DetectRevealedLocations uses LLM to analyze dialogue and returns location IDs that are being revealed
 func (d *LocationRevealDetector) DetectRevealedLocations(dialogue string) []string {
-	revealed := []string{}
-	dialogueLower := strings.ToLower(dialogue)
-
-	// Pattern 1: Direct location mentions with revealing phrases
-	revealPhrases := []string{
-		"meet me at",
-		"find me at",
-		"i'll be at",
-		"come to the",
-		"go to the",
-		"head to the",
-		"it's at the",
-		"located at",
-		"you'll find it at",
-		"i'll show you to",
-		"i'll take you to",
-		"follow me to",
-		"let's go to",
-		"i can get you into",
-		"i have access to",
-		"i know a way into",
-		"the key to the",
-		"the entrance to",
+	// Build location list for the prompt
+	locationInfo := "Available locations and their IDs:\n"
+	for _, loc := range d.locations {
+		locationInfo += fmt.Sprintf("- %s (ID: %s)\n", loc.LocationName, loc.ID)
 	}
 
-	// Pattern 2: Action-based reveals
-	actionPatterns := []string{
-		`\[hands over.*key.*\]`,
-		`\[gives.*access.*\]`,
-		`\[shows.*map.*\]`,
-		`\[draws.*map.*\]`,
-		`\[writes.*address.*\]`,
-		`\[points.*direction.*\]`,
-		`\[unlocks.*door.*\]`,
+	// Construct prompt for LLM
+	prompt := fmt.Sprintf(`You are a location reveal detector. Analyze the following character dialogue and identify which locations the character is ACTIVELY REVEALING or GRANTING ACCESS TO.
+
+%s
+
+Character's dialogue:
+"%s"
+
+IMPORTANT: A location is considered "revealed" when:
+1. The character is giving directions or showing how to get there
+2. The character is granting access, permission, or clearance
+3. The character is providing keys, codes, or passwords
+4. The character is scheduling a meeting there
+5. The character is sending/transferring location data or coordinates
+
+Simply mentioning a location is NOT revealing it. The character must be actively helping the investigator gain access.
+
+Respond ONLY with a JSON array of location IDs that are being revealed. If no locations are being revealed, return an empty array.
+Example responses:
+- ["loc_1", "loc_3"]
+- []
+- ["loc_2"]`, locationInfo, dialogue)
+
+	// Create context with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Initialize Gemini client
+	client, err := genai.NewClient(ctx, &genai.ClientConfig{
+		APIKey: config.GetGeminiAPIKey(),
+	})
+	if err != nil {
+		log.Printf("[LOCATION_DETECTOR_ERROR] Failed to create Gemini client: %v", err)
+		return []string{}
 	}
 
-	// Check each location
-	for _, location := range d.locations {
-		locationNameLower := strings.ToLower(location.LocationName)
+	// Generate response
+	genConfig := &genai.GenerateContentConfig{
+		ResponseMIMEType: "application/json",
+	}
 
-		// Check reveal phrases
-		for _, phrase := range revealPhrases {
-			if strings.Contains(dialogueLower, phrase) &&
-				strings.Contains(dialogueLower, locationNameLower) {
-				// Found a reveal phrase with location name
-				if withinProximity(dialogueLower, phrase, locationNameLower, 50) {
-					log.Printf("[LOCATION_DETECTOR] Found reveal: '%s' + '%s'", phrase, location.LocationName)
-					revealed = append(revealed, location.ID)
-					break
-				}
-			}
-		}
+	resp, err := client.Models.GenerateContent(ctx, config.GetGeminiModel(),
+		[]*genai.Content{genai.NewContentFromText(prompt, genai.RoleUser)},
+		genConfig)
+	if err != nil {
+		log.Printf("[LOCATION_DETECTOR_ERROR] Failed to generate response: %v", err)
+		return []string{}
+	}
 
-		// Check action patterns
-		for _, pattern := range actionPatterns {
-			re := regexp.MustCompile(pattern)
-			if re.MatchString(dialogueLower) && strings.Contains(dialogueLower, locationNameLower) {
-				log.Printf("[LOCATION_DETECTOR] Found action reveal: pattern '%s' with '%s'", pattern, location.LocationName)
-				revealed = append(revealed, location.ID)
-				break
-			}
-		}
+	// Parse the JSON response
+	var revealedLocationIDs []string
+	responseText := resp.Text()
+	if err := json.Unmarshal([]byte(responseText), &revealedLocationIDs); err != nil {
+		log.Printf("[LOCATION_DETECTOR_ERROR] Failed to parse LLM response: %v. Response was: %s", err, responseText)
+		return []string{}
+	}
 
-		// Pattern 3: Specific location-revealing dialogue
-		specificPatterns := [][]string{
-			{locationNameLower, "here's how to get there"},
-			{locationNameLower, "i'll let you in"},
-			{locationNameLower, "you have my permission"},
-			{locationNameLower, "tell them i sent you"},
-			{locationNameLower, "use this to get in"},
-			{"password", locationNameLower},
-			{"code", locationNameLower},
-			{locationNameLower, "is open to you"},
-			{locationNameLower, "expecting you"},
-			{"arranged access", locationNameLower},
-		}
+	log.Printf("[LOCATION_DETECTOR] LLM detected locations: %v for dialogue: %s", revealedLocationIDs, dialogue)
 
-		// Pattern 4: Context-aware moderate detection
-		// Check if location is mentioned with future meeting intent
-		meetingIndicators := []string{
-			"see you", "find you", "waiting", "meet", "rendezvous", "gather",
-		}
+	// Validate that returned IDs are valid
+	validIDs := make(map[string]bool)
+	for _, loc := range d.locations {
+		validIDs[loc.ID] = true
+	}
 
-		timeIndicators := []string{
-			"tonight", "tomorrow", "later", "soon", "at midnight", "at dawn",
-			"in an hour", "after dark",
-		}
-
-		// If location is mentioned with both meeting and time indicators, it's likely a reveal
-		locationFound := false
-		for _, meeting := range meetingIndicators {
-			for _, time := range timeIndicators {
-				if strings.Contains(dialogueLower, meeting) &&
-					strings.Contains(dialogueLower, time) &&
-					strings.Contains(dialogueLower, locationNameLower) {
-					log.Printf("[LOCATION_DETECTOR] Found moderate reveal: meeting+time pattern for '%s'", location.LocationName)
-					revealed = append(revealed, location.ID)
-					locationFound = true
-					break
-				}
-			}
-			if locationFound {
-				break
-			}
-		}
-
-		for _, pattern := range specificPatterns {
-			allFound := true
-			for _, term := range pattern {
-				if !strings.Contains(dialogueLower, term) {
-					allFound = false
-					break
-				}
-			}
-			if allFound {
-				log.Printf("[LOCATION_DETECTOR] Found specific pattern for '%s'", location.LocationName)
-				revealed = append(revealed, location.ID)
-				break
-			}
+	filtered := []string{}
+	for _, id := range revealedLocationIDs {
+		if validIDs[id] {
+			filtered = append(filtered, id)
+		} else {
+			log.Printf("[LOCATION_DETECTOR_WARNING] LLM returned invalid location ID: %s", id)
 		}
 	}
 
-	// Remove duplicates
-	return uniqueStrings(revealed)
-}
-
-// withinProximity checks if two strings appear within n characters of each other
-func withinProximity(text, str1, str2 string, maxDistance int) bool {
-	idx1 := strings.Index(text, str1)
-	idx2 := strings.Index(text, str2)
-
-	if idx1 == -1 || idx2 == -1 {
-		return false
-	}
-
-	distance := idx2 - idx1
-	if distance < 0 {
-		distance = -distance
-	}
-
-	return distance <= maxDistance
-}
-
-// uniqueStrings removes duplicates from string slice
-func uniqueStrings(input []string) []string {
-	seen := make(map[string]bool)
-	result := []string{}
-
-	for _, s := range input {
-		if !seen[s] {
-			seen[s] = true
-			result = append(result, s)
-		}
-	}
-
-	return result
+	return filtered
 }
