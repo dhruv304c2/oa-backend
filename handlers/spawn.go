@@ -114,7 +114,7 @@ func SpawnAgentHandler(w http.ResponseWriter, r *http.Request) {
 	// This ensures the agent can be properly reconstructed after server restart
 	fullSystemPrompt := fmt.Sprintf("%s\n\n[STORY CONTEXT FOR REFERENCE]:\n%s", systemPrompt, story.Story.FullStory)
 	go func(agentID, content string) {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
 		// For system prompts, full content has everything but client content is empty (hidden)

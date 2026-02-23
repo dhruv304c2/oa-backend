@@ -3,6 +3,7 @@ package prompts
 import (
 	"agent/models"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -47,6 +48,13 @@ func ConstructCharacterSystemPrompt(character *models.Character, story *models.S
 	// Generate personality-specific behaviors
 	personalityBehaviors := generatePersonalityBehaviors(character.PersonalityProfile)
 
+	presentInLocations := "You can be only found in the following locations, never promise to meet outside of these locations:\n"
+	for _, locId := range story.Story.Locations {
+		if slices.Contains(locId.CharacterIDsInLocation, character.ID) {
+			presentInLocations += fmt.Sprintf("- [%s]: %s\n", locId, locId.LocationName)
+		}
+	}
+
 	systemPrompt := fmt.Sprintf(`You are %s.
 
 APPEARANCE: %s
@@ -71,8 +79,14 @@ IMPORTANT DISTINCTION - MENTIONING vs REVEALING:
 - You can MENTION any location or evidence you know about from the story
 - You can only REVEAL (grant access/give) items from your specific lists
 - When you mention items you can't reveal, explain why:
-  - Locations: "I know where the lab is, but I don't have clearance"
-  - Evidence: "I've heard about that diary, but I don't have it"
+  - Locations: 
+  	"I know where the lab is, but I don't have clearance"
+	"I know about the secret hideout, but I can't tell you where it is"
+	"I know the location of the crime scene, but I don't want to get involved"
+	"I know where the market, but I don't know how to get there"
+  - Evidence: 
+  	"I've heard about that diary, but I don't have it"
+	"I know about that letter, but it's not in my possession"
 - This creates realistic dialogue while maintaining game mechanics
 
 CRITICAL KNOWLEDGE BOUNDARIES WITH JSON:
@@ -81,11 +95,12 @@ CRITICAL KNOWLEDGE BOUNDARIES WITH JSON:
 - NEVER include unknown IDs in revealed arrays
 - For unknown locations: reply dismissively
 - For unpossessed evidence: can mention if presented, set revealed_evidences to []
+- %s
 
 LOCATION REVEALING IN DIALOGUE:
 When you want to reveal a location to the investigator, use clear language patterns:
-- "Meet me at [location]" - scheduling a meeting
-- "I'll take you to [location]" - offering to guide
+- "Meet me at [location]" - scheduling a meeting (only if you can be found there)
+- "I'll take you to [location]" - offering to guide (only if you can be found there)
 - "Here's the key to [location]" - providing access
 - "[hands over map] This shows where [location] is" - giving directions
 - "The password for [location] is..." - sharing access codes
@@ -298,40 +313,11 @@ Remember: You are a character in this story. Respond naturally and conversationa
 		character.KnowledgeBase,
 		evidenceDescriptions,
 		knownLocations,
+		presentInLocations,
 		cooperationLevel,
 		personalityBehaviors)
 
 	return systemPrompt, evidenceIDs
-}
-
-// Helper function to identify critical evidence
-func containsCriticalKeywords(description string) bool {
-	criticalKeywords := []string{
-		"murder", "weapon", "blood", "death", "kill", "secret", "hidden",
-		"confidential", "incriminating", "proof", "evidence", "guilty",
-	}
-	lowerDesc := strings.ToLower(description)
-	for _, keyword := range criticalKeywords {
-		if strings.Contains(lowerDesc, keyword) {
-			return true
-		}
-	}
-	return false
-}
-
-// Helper function to identify personal evidence
-func containsPersonalKeywords(description string) bool {
-	personalKeywords := []string{
-		"personal", "private", "letter", "diary", "note", "conversation",
-		"meeting", "relationship", "affair", "argument", "dispute",
-	}
-	lowerDesc := strings.ToLower(description)
-	for _, keyword := range personalKeywords {
-		if strings.Contains(lowerDesc, keyword) {
-			return true
-		}
-	}
-	return false
 }
 
 // Determine initial cooperation level based on personality
