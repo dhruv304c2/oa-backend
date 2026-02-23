@@ -25,7 +25,7 @@ func NewLocationRevealDetector(story *models.Story) *LocationRevealDetector {
 }
 
 // DetectRevealedLocations uses LLM to analyze dialogue and returns location IDs that are being revealed
-func (d *LocationRevealDetector) DetectRevealedLocations(dialogue string) []string {
+func (d *LocationRevealDetector) DetectRevealedLocations(ctx context.Context, dialogue string) []string {
 	// Build location list for the prompt
 	locationInfo := "Available locations and their IDs:\n"
 	for _, loc := range d.locations {
@@ -56,11 +56,6 @@ Example responses:
 - ["loc_1", "loc_3"]
 - []
 - ["loc_2"]`, locationInfo, dialogue)
-
-	// Create context with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
 	// Initialize Gemini client
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
 		APIKey: config.GetGeminiAPIKey(),
