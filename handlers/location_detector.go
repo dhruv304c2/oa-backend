@@ -47,6 +47,8 @@ IMPORTANT: A location is considered "revealed" when:
 4. The character is scheduling a meeting there
 5. The character is sending/transferring location data or coordinates
 
+* Or any other explicit action that helps the investigator gain access to the location. *
+
 Simply mentioning a location is NOT revealing it. The character must be actively helping the investigator gain access.
 
 Respond ONLY with a JSON array of location IDs that are being revealed. If no locations are being revealed, return an empty array.
