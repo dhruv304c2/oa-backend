@@ -19,8 +19,8 @@ type HistoryMessage struct {
 	Role              string    `json:"role"`
 	Content           string    `json:"content"`
 	Timestamp         time.Time `json:"timestamp"`
-	RevealedEvidences []string `json:"revealed_evidences,omitempty"`
-	RevealedLocations []string `json:"revealed_locations,omitempty"`
+	RevealedEvidences []string  `json:"revealed_evidences,omitempty"`
+	RevealedLocations []string  `json:"revealed_locations,omitempty"`
 }
 
 type HistoryResponse struct {

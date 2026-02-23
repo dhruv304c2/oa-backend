@@ -75,29 +75,29 @@ func FeedHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 type StoryDetailResponse struct {
-	ID            string                  `json:"id"`
-	Title         string                  `json:"title"`
-	NewsArticle   models.NewsArticle      `json:"news_article"`
-	CoverImageURL string                  `json:"cover_image_url,omitempty"`
-	Characters    []CharacterSummary      `json:"characters"`
-	Locations     []LocationSummary       `json:"locations"`
-	CreatedAt     time.Time              `json:"created_at"`
+	ID            string             `json:"id"`
+	Title         string             `json:"title"`
+	NewsArticle   models.NewsArticle `json:"news_article"`
+	CoverImageURL string             `json:"cover_image_url,omitempty"`
+	Characters    []CharacterSummary `json:"characters"`
+	Locations     []LocationSummary  `json:"locations"`
+	CreatedAt     time.Time          `json:"created_at"`
 }
 
 type CharacterSummary struct {
-	ID               string           `json:"id"`
-	Name             string           `json:"name"`
-	Description      string           `json:"description"`
-	ImageURL         string           `json:"image_url,omitempty"`
+	ID               string            `json:"id"`
+	Name             string            `json:"name"`
+	Description      string            `json:"description"`
+	ImageURL         string            `json:"image_url,omitempty"`
 	HoldsEvidence    []models.Evidence `json:"holds_evidence"`
-	KnowsLocationIDs []string         `json:"knows_location_ids"`
+	KnowsLocationIDs []string          `json:"knows_location_ids"`
 }
 
 type LocationSummary struct {
-	ID                    string   `json:"id"`
-	Name                  string   `json:"name"`
-	Description           string   `json:"description"`
-	ImageURL              string   `json:"image_url,omitempty"`
+	ID                     string   `json:"id"`
+	Name                   string   `json:"name"`
+	Description            string   `json:"description"`
+	ImageURL               string   `json:"image_url,omitempty"`
 	CharacterIDsInLocation []string `json:"character_ids_in_location"`
 }
 
@@ -154,10 +154,10 @@ func StoryDetailHandler(w http.ResponseWriter, r *http.Request) {
 	locations := make([]LocationSummary, 0, len(story.Story.Locations))
 	for _, loc := range story.Story.Locations {
 		locations = append(locations, LocationSummary{
-			ID:                    loc.ID,
-			Name:                  loc.LocationName,
-			Description:           loc.VisualDescription,
-			ImageURL:              loc.ImageURL,
+			ID:                     loc.ID,
+			Name:                   loc.LocationName,
+			Description:            loc.VisualDescription,
+			ImageURL:               loc.ImageURL,
 			CharacterIDsInLocation: loc.CharacterIDsInLocation,
 		})
 	}

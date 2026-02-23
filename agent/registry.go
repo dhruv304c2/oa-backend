@@ -29,7 +29,7 @@ func SpawnAgent(systemPrompt string) string {
 	agentID := fmt.Sprintf("agent-%d", rand.Intn(1000000))
 
 	agent := &Agent{
-		ID:      agentID,
+		ID: agentID,
 		History: []*genai.Content{
 			genai.NewContentFromText(systemPrompt, genai.RoleUser),
 		},
@@ -263,12 +263,12 @@ func LoadAgentFromDatabase(agentID string) (*Agent, error) {
 
 				filter := bson.M{
 					"agent_id": agentID,
-					"index": 0,
-					"role": "model",
+					"index":    0,
+					"role":     "model",
 				}
 				update := bson.M{
 					"$set": bson.M{
-						"content": newPrompt,
+						"content":    newPrompt,
 						"updated_at": time.Now(),
 					},
 				}

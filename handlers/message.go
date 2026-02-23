@@ -31,7 +31,6 @@ type MessageResponse struct {
 	RevealedLocations []string `json:"revealed_locations"`
 }
 
-
 func MessageHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -213,7 +212,7 @@ func MessageHandler(w http.ResponseWriter, r *http.Request) {
 		if err == nil {
 			// Use location detector as sole source of location reveals
 			detector := NewLocationRevealDetector(&story)
-			aiResponse.RevealedLocations = detector.DetectRevealedLocations(aiResponse.Reply)
+			aiResponse.RevealedLocations = detector.DetectRevealedLocations(ctx, aiResponse.Reply)
 
 			log.Printf("[MESSAGE_LOCATION_DETECTION] Agent %s - Detector found locations: %v",
 				agentObj.CharacterName, aiResponse.RevealedLocations)
@@ -447,11 +446,3 @@ func fetchLocationDetailsForIDs(storyID string, locationIDs []string) ([]models.
 
 	return locations, nil
 }
-
-
-
-
-
-
-
-

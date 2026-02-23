@@ -39,10 +39,10 @@ func TestLocationRevealDetectorStructure(t *testing.T) {
 // These document the expected behavior but can't run without mocking
 
 var locationRevealTestCases = []struct {
-	name             string
-	dialogue         string
-	expectedReveals  []string
-	description      string
+	name            string
+	dialogue        string
+	expectedReveals []string
+	description     string
 }{
 	{
 		name:            "Tech-based direction sending",

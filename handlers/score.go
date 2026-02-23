@@ -16,8 +16,8 @@ import (
 )
 
 type ScoreRequest struct {
-	StoryID           string   `json:"story_id"`
-	Theory            string   `json:"theory"`
+	StoryID            string   `json:"story_id"`
+	Theory             string   `json:"theory"`
 	DiscoveredEvidence []string `json:"discovered_evidence,omitempty"`
 }
 
