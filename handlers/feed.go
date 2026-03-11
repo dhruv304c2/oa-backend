@@ -78,6 +78,7 @@ type StoryDetailResponse struct {
 	ID            string             `json:"id"`
 	Title         string             `json:"title"`
 	NewsArticle   models.NewsArticle `json:"news_article"`
+	StartingLocationIds []string     `json:"starting_location_ids"`
 	CoverImageURL string             `json:"cover_image_url,omitempty"`
 	Characters    []CharacterSummary `json:"characters"`
 	Locations     []LocationSummary  `json:"locations"`
@@ -168,6 +169,7 @@ func StoryDetailHandler(w http.ResponseWriter, r *http.Request) {
 		Title:         story.Story.Title,
 		NewsArticle:   story.Story.NewsArticle,
 		CoverImageURL: story.Story.CoverImageURL,
+		StartingLocationIds: story.Story.StartingLocationIDs,
 		Characters:    characters,
 		Locations:     locations,
 		CreatedAt:     story.CreatedAt,
