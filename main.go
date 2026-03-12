@@ -36,8 +36,6 @@ func main() {
 	db.CreateAgentIndexes()
 
 	// Set up HTTP handlers with CORS
-	http.HandleFunc("/spawn", middleware.EnableCORS(handlers.SpawnAgentHandler))
-	http.HandleFunc("/message", middleware.EnableCORS(handlers.MessageHandler))
 	http.HandleFunc("/agent/history", middleware.EnableCORS(handlers.HistoryHandler))
 	http.HandleFunc("/score", middleware.EnableCORS(handlers.ScoreTheoryHandler))
 	http.HandleFunc("/feed", middleware.EnableCORS(handlers.FeedHandler))

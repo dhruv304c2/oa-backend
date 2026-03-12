@@ -11,8 +11,9 @@ import (
 )
 
 var (
-	client   *mongo.Client
-	database *mongo.Database
+	client      *mongo.Client
+	database    *mongo.Database
+	dataStoreDB *mongo.Database
 )
 
 // InitMongoDB initializes the MongoDB connection
@@ -39,8 +40,10 @@ func InitMongoDB() error {
 		return err
 	}
 
-	// Use the case-gen database
+	// Use the case-gen database for core game data
 	database = client.Database("case-gen")
+	// Use oa-agents-ds for chat message history
+	dataStoreDB = client.Database("oa-agents-ds")
 
 	log.Println("Connected to MongoDB successfully")
 	return nil
@@ -49,6 +52,11 @@ func InitMongoDB() error {
 // GetCollection returns a MongoDB collection
 func GetCollection(collectionName string) *mongo.Collection {
 	return database.Collection(collectionName)
+}
+
+// GetDataStoreCollection returns a collection from the oa-agents-ds database
+func GetDataStoreCollection(collectionName string) *mongo.Collection {
+	return dataStoreDB.Collection(collectionName)
 }
 
 // GetClient returns the MongoDB client

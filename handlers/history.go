@@ -7,27 +7,40 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 type HistoryRequest struct {
-	AgentID string `json:"agent_id"`
-	Limit   int    `json:"limit"`
-	Offset  int    `json:"offset"`
+	SessionID string `json:"session_id"`
+	AgentID   string `json:"agent_id,omitempty"`
+	Limit     int    `json:"limit"`
+	Offset    int    `json:"offset"`
 }
 
 type HistoryMessage struct {
-	Role              string    `json:"role"`
-	Content           string    `json:"content"`
-	Timestamp         time.Time `json:"timestamp"`
-	RevealedEvidences []string  `json:"revealed_evidences,omitempty"`
-	RevealedLocations []string  `json:"revealed_locations,omitempty"`
+	Role              string          `json:"role"`
+	Content           json.RawMessage `json:"content"`
+	Timestamp         time.Time       `json:"timestamp"`
+	Sequence          int             `json:"sequence"`
+	RevealedEvidences []string        `json:"revealed_evidences,omitempty"`
+	RevealedLocations []string        `json:"revealed_locations,omitempty"`
 }
 
 type HistoryResponse struct {
-	AgentID  string           `json:"agent_id"`
-	Messages []HistoryMessage `json:"messages"`
-	Total    int64            `json:"total"`
-	HasMore  bool             `json:"has_more"`
+	SessionID string           `json:"session_id"`
+	Messages  []HistoryMessage `json:"messages"`
+	Total     int64            `json:"total"`
+	HasMore   bool             `json:"has_more"`
+}
+
+type chatMessageDocument struct {
+	SessionID string    `bson:"session_id"`
+	Role      string    `bson:"role"`
+	Content   string    `bson:"content"`
+	Timestamp time.Time `bson:"timestamp"`
+	Sequence  int       `bson:"sequence"`
 }
 
 func HistoryHandler(w http.ResponseWriter, r *http.Request) {
@@ -37,22 +50,30 @@ func HistoryHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req HistoryRequest
-	var includeFull bool
 
 	if r.Method == http.MethodGet {
 		// Parse query parameters
-		req.AgentID = r.URL.Query().Get("agent_id")
+		req.SessionID = r.URL.Query().Get("session_id")
+		// Backward compatibility for old clients
+		if req.SessionID == "" {
+			req.SessionID = r.URL.Query().Get("agent_id")
+		}
 		req.Limit, _ = strconv.Atoi(r.URL.Query().Get("limit"))
 		req.Offset, _ = strconv.Atoi(r.URL.Query().Get("offset"))
-		includeFull = r.URL.Query().Get("include_full") == "true"
 	} else {
 		// Parse JSON body
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Bad request", http.StatusBadRequest)
 			return
 		}
-		// For POST requests, default to client version only
-		includeFull = false
+		if req.SessionID == "" {
+			req.SessionID = req.AgentID
+		}
+	}
+
+	if req.SessionID == "" {
+		http.Error(w, "session_id is required", http.StatusBadRequest)
+		return
 	}
 
 	// Set defaults
@@ -63,33 +84,47 @@ func HistoryHandler(w http.ResponseWriter, r *http.Request) {
 		req.Offset = 0
 	}
 
-	// Fetch from database
+	// Fetch from datastore database
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	messages, total, err := db.GetConversationHistory(ctx, req.AgentID, req.Limit, req.Offset)
+	collection := db.GetDataStoreCollection("chat_messages")
+	if collection == nil {
+		http.Error(w, "Datastore not initialized", http.StatusInternalServerError)
+		return
+	}
+
+	filter := bson.M{"session_id": req.SessionID}
+	total, err := collection.CountDocuments(ctx, filter)
+	if err != nil {
+		http.Error(w, "Failed to count history", http.StatusInternalServerError)
+		return
+	}
+
+	findOpts := options.Find().
+		SetSort(bson.D{{Key: "sequence", Value: 1}}).
+		SetLimit(int64(req.Limit)).
+		SetSkip(int64(req.Offset))
+
+	cursor, err := collection.Find(ctx, filter, findOpts)
 	if err != nil {
 		http.Error(w, "Failed to fetch history", http.StatusInternalServerError)
 		return
 	}
+	defer cursor.Close(ctx)
 
-	// Convert to response format
-	var historyMessages []HistoryMessage
-	for _, msg := range messages {
-		content := msg.ClientContent
+	var dsMessages []chatMessageDocument
+	if err := cursor.All(ctx, &dsMessages); err != nil {
+		http.Error(w, "Failed to decode history", http.StatusInternalServerError)
+		return
+	}
 
-		// Use full content if requested
-		if includeFull {
-			content = msg.Content
-		}
+	historyMessages := make([]HistoryMessage, 0, len(dsMessages))
+	for _, msg := range dsMessages {
+		content := normalizeContentPayload(msg.Content)
+		revealedEvidences, revealedLocations := extractReveals(msg.Content)
 
-		// Handle backward compatibility - if ClientContent is empty, extract it from Content
-		if content == "" && !includeFull {
-			content = extractClientContent(msg.Content, msg.Role)
-		}
-
-		// Skip messages with no content (e.g., hidden system prompts)
-		if content == "" {
+		if content == nil {
 			continue
 		}
 
@@ -97,18 +132,46 @@ func HistoryHandler(w http.ResponseWriter, r *http.Request) {
 			Role:              msg.Role,
 			Content:           content,
 			Timestamp:         msg.Timestamp,
-			RevealedEvidences: msg.RevealedEvidences,
-			RevealedLocations: msg.RevealedLocations,
+			Sequence:          msg.Sequence,
+			RevealedEvidences: revealedEvidences,
+			RevealedLocations: revealedLocations,
 		})
 	}
 
 	response := HistoryResponse{
-		AgentID:  req.AgentID,
-		Messages: historyMessages,
-		Total:    total,
-		HasMore:  int64(req.Offset+req.Limit) < total,
+		SessionID: req.SessionID,
+		Messages:  historyMessages,
+		Total:     total,
+		HasMore:   int64(req.Offset+req.Limit) < total,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
+}
+
+// normalizeContentPayload attempts to convert the stored string content into JSON for responses
+func normalizeContentPayload(content string) json.RawMessage {
+	if content == "" {
+		return nil
+	}
+
+	if json.Valid([]byte(content)) {
+		return json.RawMessage(content)
+	}
+
+	return json.RawMessage([]byte(`"` + content + `"`))
+}
+
+// extractReveals pulls reveal metadata from the stored content payloads (if present)
+func extractReveals(content string) ([]string, []string) {
+	var payload struct {
+		RevealedEvidences []string `json:"revealed_evidences"`
+		RevealedLocations []string `json:"revealed_locations"`
+	}
+
+	if err := json.Unmarshal([]byte(content), &payload); err != nil {
+		return nil, nil
+	}
+
+	return payload.RevealedEvidences, payload.RevealedLocations
 }
