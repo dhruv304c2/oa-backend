@@ -1,8 +1,9 @@
 package models
 
 import (
-	"go.mongodb.org/mongo-driver/bson/primitive"
 	"time"
+
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 // Story represents the full story document from MongoDB
@@ -40,6 +41,8 @@ type Character struct {
 	KnowledgeBase         string     `bson:"knowledge_base" json:"knowledge_base"`
 	HoldsEvidence         []Evidence `bson:"holds_evidence" json:"holds_evidence"`
 	KnowsLocationIDs      []string   `bson:"knows_location_ids" json:"knows_location_ids"`
+	BaseReputation        int        `bson:"base_reputation" json:"base_reputation"`
+	BaseIntimidation      int        `bson:"base_intimidation" json:"base_intimidation"`
 	ImageURL              string     `bson:"image_url,omitempty" json:"image_url,omitempty"`
 }
 

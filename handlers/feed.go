@@ -75,14 +75,14 @@ func FeedHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 type StoryDetailResponse struct {
-	ID            string             `json:"id"`
-	Title         string             `json:"title"`
-	NewsArticle   models.NewsArticle `json:"news_article"`
-	StartingLocationIds []string     `json:"starting_location_ids"`
-	CoverImageURL string             `json:"cover_image_url,omitempty"`
-	Characters    []CharacterSummary `json:"characters"`
-	Locations     []LocationSummary  `json:"locations"`
-	CreatedAt     time.Time          `json:"created_at"`
+	ID                  string             `json:"id"`
+	Title               string             `json:"title"`
+	NewsArticle         models.NewsArticle `json:"news_article"`
+	StartingLocationIds []string           `json:"starting_location_ids"`
+	CoverImageURL       string             `json:"cover_image_url,omitempty"`
+	Characters          []CharacterSummary `json:"characters"`
+	Locations           []LocationSummary  `json:"locations"`
+	CreatedAt           time.Time          `json:"created_at"`
 }
 
 type CharacterSummary struct {
@@ -90,6 +90,8 @@ type CharacterSummary struct {
 	Name             string            `json:"name"`
 	Description      string            `json:"description"`
 	ImageURL         string            `json:"image_url,omitempty"`
+	BaseIntimidation int               `json:"base_intimidation"`
+	BaseReputation   int               `json:"base_reputation"`
 	HoldsEvidence    []models.Evidence `json:"holds_evidence"`
 	KnowsLocationIDs []string          `json:"knows_location_ids"`
 }
@@ -146,6 +148,8 @@ func StoryDetailHandler(w http.ResponseWriter, r *http.Request) {
 			Name:             char.Name,
 			Description:      char.AppearanceDescription,
 			ImageURL:         char.ImageURL,
+			BaseIntimidation: char.BaseIntimidation,
+			BaseReputation:   char.BaseReputation,
 			HoldsEvidence:    char.HoldsEvidence,
 			KnowsLocationIDs: char.KnowsLocationIDs,
 		})
@@ -165,14 +169,14 @@ func StoryDetailHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Build response
 	response := StoryDetailResponse{
-		ID:            story.ID.Hex(),
-		Title:         story.Story.Title,
-		NewsArticle:   story.Story.NewsArticle,
-		CoverImageURL: story.Story.CoverImageURL,
+		ID:                  story.ID.Hex(),
+		Title:               story.Story.Title,
+		NewsArticle:         story.Story.NewsArticle,
+		CoverImageURL:       story.Story.CoverImageURL,
 		StartingLocationIds: story.Story.StartingLocationIDs,
-		Characters:    characters,
-		Locations:     locations,
-		CreatedAt:     story.CreatedAt,
+		Characters:          characters,
+		Locations:           locations,
+		CreatedAt:           story.CreatedAt,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
