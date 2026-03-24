@@ -32,18 +32,30 @@ type NewsArticle struct {
 	Content string `bson:"content" json:"content"`
 }
 
+// InGameCharacterVisualData represents the visual data for rendering a character in-game
+type InGameCharacterVisualData struct {
+	Hairstyle   string     `bson:"hairstyle" json:"hairstyle"`
+	HairColor   [3]float64 `bson:"hair_color" json:"hair_color"`
+	TopColor    [3]float64 `bson:"top_color" json:"top_color"`
+	BottomColor [3]float64 `bson:"bottom_color" json:"bottom_color"`
+	SkinColor   [3]float64 `bson:"skin_color" json:"skin_color"`
+}
+
 // Character represents a character in the story
 type Character struct {
-	ID                    string     `bson:"id" json:"id"`
-	Name                  string     `bson:"name" json:"name"`
-	AppearanceDescription string     `bson:"appearance_description" json:"appearance_description"`
-	PersonalityProfile    string     `bson:"personality_profile" json:"personality_profile"`
-	KnowledgeBase         string     `bson:"knowledge_base" json:"knowledge_base"`
-	HoldsEvidence         []Evidence `bson:"holds_evidence" json:"holds_evidence"`
-	KnowsLocationIDs      []string   `bson:"knows_location_ids" json:"knows_location_ids"`
-	BaseReputation        int        `bson:"base_reputation" json:"base_reputation"`
-	BaseIntimidation      int        `bson:"base_intimidation" json:"base_intimidation"`
-	ImageURL              string     `bson:"image_url,omitempty" json:"image_url,omitempty"`
+	ID                        string                     `bson:"id" json:"id"`
+	Name                      string                     `bson:"name" json:"name"`
+	Gender                    string                     `bson:"gender" json:"gender"`
+	AppearanceDescription     string                     `bson:"appearance_description" json:"appearance_description"`
+	InGameCharacterVisualData *InGameCharacterVisualData `bson:"in_game_character_visual_data,omitempty" json:"in_game_character_visual_data,omitempty"`
+	PersonalityProfile        string                     `bson:"personality_profile" json:"personality_profile"`
+	KnowledgeBase             string                     `bson:"knowledge_base" json:"knowledge_base"`
+	HoldsEvidence             []Evidence                 `bson:"holds_evidence" json:"holds_evidence"`
+	KnowsLocationIDs          []string                   `bson:"knows_location_ids" json:"knows_location_ids"`
+	ImageURL                  string                     `bson:"image_url,omitempty" json:"image_url,omitempty"`
+	BaseReputation            int                        `bson:"base_reputation" json:"base_reputation"`
+	BaseIntimidation          int                        `bson:"base_intimidation" json:"base_intimidation"`
+	ProvidesHints             []string                   `bson:"provides_hints" json:"provides_hints"`
 }
 
 // Evidence represents evidence held by a character
@@ -53,6 +65,9 @@ type Evidence struct {
 	Description       string `bson:"description" json:"description"`
 	VisualDescription string `bson:"visual_description" json:"visual_description"`
 	ImageURL          string `bson:"image_url,omitempty" json:"image_url,omitempty"`
+	IsCritical        bool   `bson:"is_critical" json:"is_critical"`
+	MinReputation     int    `bson:"min_reputation" json:"min_reputation"`
+	MinIntimidation   int    `bson:"min_intimidation" json:"min_intimidation"`
 }
 
 // Location represents a location in the story

@@ -86,14 +86,17 @@ type StoryDetailResponse struct {
 }
 
 type CharacterSummary struct {
-	ID               string            `json:"id"`
-	Name             string            `json:"name"`
-	Description      string            `json:"description"`
-	ImageURL         string            `json:"image_url,omitempty"`
-	BaseIntimidation int               `json:"base_intimidation"`
-	BaseReputation   int               `json:"base_reputation"`
-	HoldsEvidence    []models.Evidence `json:"holds_evidence"`
-	KnowsLocationIDs []string          `json:"knows_location_ids"`
+	ID                        string                          `json:"id"`
+	Name                      string                          `json:"name"`
+	Gender                    string                          `json:"gender"`
+	Description               string                          `json:"description"`
+	InGameCharacterVisualData *models.InGameCharacterVisualData `json:"in_game_character_visual_data,omitempty"`
+	ImageURL                  string                          `json:"image_url,omitempty"`
+	BaseIntimidation          int                             `json:"base_intimidation"`
+	BaseReputation            int                             `json:"base_reputation"`
+	HoldsEvidence             []models.Evidence               `json:"holds_evidence"`
+	KnowsLocationIDs          []string                        `json:"knows_location_ids"`
+	ProvidesHints             []string                        `json:"provides_hints"`
 }
 
 type LocationSummary struct {
@@ -144,14 +147,17 @@ func StoryDetailHandler(w http.ResponseWriter, r *http.Request) {
 	characters := make([]CharacterSummary, 0, len(story.Story.Characters))
 	for _, char := range story.Story.Characters {
 		characters = append(characters, CharacterSummary{
-			ID:               char.ID,
-			Name:             char.Name,
-			Description:      char.AppearanceDescription,
-			ImageURL:         char.ImageURL,
-			BaseIntimidation: char.BaseIntimidation,
-			BaseReputation:   char.BaseReputation,
-			HoldsEvidence:    char.HoldsEvidence,
-			KnowsLocationIDs: char.KnowsLocationIDs,
+			ID:                        char.ID,
+			Name:                      char.Name,
+			Gender:                    char.Gender,
+			Description:               char.AppearanceDescription,
+			InGameCharacterVisualData: char.InGameCharacterVisualData,
+			ImageURL:                  char.ImageURL,
+			BaseIntimidation:          char.BaseIntimidation,
+			BaseReputation:            char.BaseReputation,
+			HoldsEvidence:             char.HoldsEvidence,
+			KnowsLocationIDs:          char.KnowsLocationIDs,
+			ProvidesHints:             char.ProvidesHints,
 		})
 	}
 
