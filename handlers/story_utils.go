@@ -40,5 +40,16 @@ func fetchEvidenceDetails(storyID string, evidenceIDs []string) ([]models.Eviden
 		}
 	}
 
+	// Also search evidence inside location containers
+	for _, location := range story.Story.Locations {
+		for _, container := range location.Containers {
+			for _, evidence := range container.ContainsEvidence {
+				if evidenceMap[evidence.ID] {
+					evidenceDetails = append(evidenceDetails, evidence)
+				}
+			}
+		}
+	}
+
 	return evidenceDetails, nil
 }

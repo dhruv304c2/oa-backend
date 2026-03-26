@@ -11,6 +11,7 @@ type Story struct {
 	ID        primitive.ObjectID `bson:"_id" json:"id"`
 	Story     StoryContent       `bson:"story" json:"story"`
 	RawStory  string             `bson:"raw_story" json:"raw_story"`
+	Theme     string             `bson:"theme" json:"theme"`
 	CreatedAt time.Time          `bson:"created_at" json:"created_at"`
 	UpdatedAt time.Time          `bson:"updated_at" json:"updated_at"`
 }
@@ -34,11 +35,21 @@ type NewsArticle struct {
 
 // InGameCharacterVisualData represents the visual data for rendering a character in-game
 type InGameCharacterVisualData struct {
-	Hairstyle   string     `bson:"hairstyle" json:"hairstyle"`
-	HairColor   [3]float64 `bson:"hair_color" json:"hair_color"`
-	TopColor    [3]float64 `bson:"top_color" json:"top_color"`
-	BottomColor [3]float64 `bson:"bottom_color" json:"bottom_color"`
-	SkinColor   [3]float64 `bson:"skin_color" json:"skin_color"`
+	Body    string `bson:"body" json:"body"`
+	Head    string `bson:"head" json:"head"`
+	Ears    string `bson:"ears" json:"ears"`
+	Eyes    string `bson:"eyes" json:"eyes"`
+	Mouth   string `bson:"mouth" json:"mouth"`
+	Hair    string `bson:"hair" json:"hair"`
+	Armor   string `bson:"armor" json:"armor"`
+	Helmet  string `bson:"helmet" json:"helmet"`
+	Weapon  string `bson:"weapon" json:"weapon"`
+	Shield  string `bson:"shield" json:"shield"`
+	Cape    string `bson:"cape" json:"cape"`
+	Back    string `bson:"back" json:"back"`
+	Mask    string `bson:"mask" json:"mask"`
+	Horns   string `bson:"horns" json:"horns"`
+	Firearm string `bson:"firearm" json:"firearm"`
 }
 
 // Character represents a character in the story
@@ -70,11 +81,32 @@ type Evidence struct {
 	MinIntimidation   int    `bson:"min_intimidation" json:"min_intimidation"`
 }
 
+// CodeHint represents a hint for unlocking a container
+type CodeHint struct {
+	Type        string `bson:"type" json:"type"`
+	Description string `bson:"description" json:"description"`
+	Source      string `bson:"source" json:"source"`
+}
+
+// Container represents a locked container within a location
+type Container struct {
+	ID               string     `bson:"id" json:"id"`
+	Name             string     `bson:"name" json:"name"`
+	Type             string     `bson:"type" json:"type"`
+	Description      string     `bson:"description" json:"description"`
+	UnlockCode       string     `bson:"unlock_code" json:"unlock_code"`
+	CodeHint         CodeHint   `bson:"code_hint" json:"code_hint"`
+	ContainsEvidence []Evidence `bson:"contains_evidence" json:"contains_evidence"`
+	IsLocked         bool       `bson:"is_locked" json:"is_locked"`
+	Difficulty       string     `bson:"difficulty" json:"difficulty"`
+}
+
 // Location represents a location in the story
 type Location struct {
-	ID                     string   `bson:"id" json:"id"`
-	LocationName           string   `bson:"location_name" json:"location_name"`
-	VisualDescription      string   `bson:"visual_description" json:"visual_description"`
-	CharacterIDsInLocation []string `bson:"character_ids_in_location" json:"character_ids_in_location"`
-	ImageURL               string   `bson:"image_url,omitempty" json:"image_url,omitempty"`
+	ID                     string      `bson:"id" json:"id"`
+	LocationName           string      `bson:"location_name" json:"location_name"`
+	VisualDescription      string      `bson:"visual_description" json:"visual_description"`
+	CharacterIDsInLocation []string    `bson:"character_ids_in_location" json:"character_ids_in_location"`
+	ImageURL               string      `bson:"image_url,omitempty" json:"image_url,omitempty"`
+	Containers             []Container `bson:"containers" json:"containers"`
 }

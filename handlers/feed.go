@@ -100,11 +100,12 @@ type CharacterSummary struct {
 }
 
 type LocationSummary struct {
-	ID                     string   `json:"id"`
-	Name                   string   `json:"name"`
-	Description            string   `json:"description"`
-	ImageURL               string   `json:"image_url,omitempty"`
-	CharacterIDsInLocation []string `json:"character_ids_in_location"`
+	ID                     string             `json:"id"`
+	Name                   string             `json:"name"`
+	Description            string             `json:"description"`
+	ImageURL               string             `json:"image_url,omitempty"`
+	CharacterIDsInLocation []string           `json:"character_ids_in_location"`
+	Containers             []models.Container `json:"containers"`
 }
 
 func StoryDetailHandler(w http.ResponseWriter, r *http.Request) {
@@ -170,6 +171,7 @@ func StoryDetailHandler(w http.ResponseWriter, r *http.Request) {
 			Description:            loc.VisualDescription,
 			ImageURL:               loc.ImageURL,
 			CharacterIDsInLocation: loc.CharacterIDsInLocation,
+			Containers:             loc.Containers,
 		})
 	}
 
