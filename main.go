@@ -41,6 +41,8 @@ func main() {
 	http.HandleFunc("/feed", middleware.EnableCORS(handlers.FeedHandler))
 	http.HandleFunc("/story", middleware.EnableCORS(handlers.StoryDetailHandler))
 	http.HandleFunc("/stories/", middleware.EnableCORS(handlers.StoryDetailRESTHandler)) // RESTful route
+	http.HandleFunc("/v2/feed", middleware.EnableCORS(handlers.FeedHandlerV2))
+	http.HandleFunc("/v2/story", middleware.EnableCORS(handlers.StoryDetailHandlerV2))
 	//http.HandleFunc("/delete", middleware.EnableCORS(handlers.DeleteAgentHandler))
 
 	fmt.Println("Server running on http://localhost:8080")
