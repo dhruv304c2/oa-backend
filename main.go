@@ -34,6 +34,7 @@ func main() {
 
 	// Create database indexes
 	db.CreateAgentIndexes()
+	db.CreateFeedbackIndexes()
 
 	// Set up HTTP handlers with CORS
 	http.HandleFunc("/agent/history", middleware.EnableCORS(handlers.HistoryHandler))
@@ -43,6 +44,8 @@ func main() {
 	http.HandleFunc("/stories/", middleware.EnableCORS(handlers.StoryDetailRESTHandler)) // RESTful route
 	http.HandleFunc("/v2/feed", middleware.EnableCORS(handlers.FeedHandlerV2))
 	http.HandleFunc("/v2/story", middleware.EnableCORS(handlers.StoryDetailHandlerV2))
+	http.HandleFunc("/feedback", middleware.EnableCORS(handlers.SubmitFeedbackHandler))
+	http.HandleFunc("/feedback/list", middleware.EnableCORS(handlers.GetFeedbackHandler))
 	//http.HandleFunc("/delete", middleware.EnableCORS(handlers.DeleteAgentHandler))
 
 	fmt.Println("Server running on http://localhost:8080")
