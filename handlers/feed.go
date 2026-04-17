@@ -1,9 +1,11 @@
 package handlers
 
 import (
+	"agent/cache"
 	"agent/db"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -11,9 +13,18 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
+var responseCache = cache.New(2 * time.Minute)
+
 func FeedHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	cacheKey := "feed:stories"
+	if cached, ok := responseCache.Get(cacheKey); ok {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(cached)
 		return
 	}
 
@@ -51,6 +62,7 @@ func FeedHandler(w http.ResponseWriter, r *http.Request) {
 		feedItems = append(feedItems, item)
 	}
 
+	responseCache.Set(cacheKey, feedItems)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(feedItems)
 }
@@ -64,6 +76,13 @@ func FeedHandlerV2(w http.ResponseWriter, r *http.Request) {
 	collectionName := r.URL.Query().Get("collection")
 	if collectionName == "" {
 		collectionName = "stories"
+	}
+
+	cacheKey := fmt.Sprintf("feed_v2:%s", collectionName)
+	if cached, ok := responseCache.Get(cacheKey); ok {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(cached)
+		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -100,6 +119,7 @@ func FeedHandlerV2(w http.ResponseWriter, r *http.Request) {
 		feedItems = append(feedItems, item)
 	}
 
+	responseCache.Set(cacheKey, feedItems)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(feedItems)
 }
@@ -121,6 +141,13 @@ func StoryDetailHandlerV2(w http.ResponseWriter, r *http.Request) {
 		collectionName = "stories"
 	}
 
+	cacheKey := fmt.Sprintf("story_v2:%s:%s", collectionName, storyID)
+	if cached, ok := responseCache.Get(cacheKey); ok {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(cached)
+		return
+	}
+
 	storyObjID, err := primitive.ObjectIDFromHex(storyID)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
@@ -145,6 +172,7 @@ func StoryDetailHandlerV2(w http.ResponseWriter, r *http.Request) {
 	story["id"] = story["_id"]
 	delete(story, "_id")
 
+	responseCache.Set(cacheKey, story)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(story)
 }
@@ -158,6 +186,13 @@ func StoryDetailHandler(w http.ResponseWriter, r *http.Request) {
 	storyID := r.URL.Query().Get("id")
 	if storyID == "" {
 		http.Error(w, "Story ID is required", http.StatusBadRequest)
+		return
+	}
+
+	cacheKey := fmt.Sprintf("story:%s", storyID)
+	if cached, ok := responseCache.Get(cacheKey); ok {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(cached)
 		return
 	}
 
@@ -185,6 +220,7 @@ func StoryDetailHandler(w http.ResponseWriter, r *http.Request) {
 	story["id"] = story["_id"]
 	delete(story, "_id")
 
+	responseCache.Set(cacheKey, story)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(story)
 }
