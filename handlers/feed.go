@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 
@@ -13,7 +14,15 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
-var responseCache = cache.New(2 * time.Minute)
+var responseCache *cache.Cache
+
+func init() {
+	var err error
+	responseCache, err = cache.New(2 * time.Minute)
+	if err != nil {
+		log.Fatalf("failed to initialize cache: %v", err)
+	}
+}
 
 func FeedHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -22,7 +31,11 @@ func FeedHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cacheKey := "feed:stories"
-	if cached, ok := responseCache.Get(cacheKey); ok {
+	cached, ok, err := responseCache.Get(cacheKey)
+	if err != nil {
+		log.Printf("cache get error: %v", err)
+	}
+	if ok {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(cached)
 		return
@@ -62,7 +75,9 @@ func FeedHandler(w http.ResponseWriter, r *http.Request) {
 		feedItems = append(feedItems, item)
 	}
 
-	responseCache.Set(cacheKey, feedItems)
+	if err := responseCache.Set(cacheKey, feedItems); err != nil {
+		log.Printf("cache set error: %v", err)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(feedItems)
 }
@@ -79,7 +94,11 @@ func FeedHandlerV2(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cacheKey := fmt.Sprintf("feed_v2:%s", collectionName)
-	if cached, ok := responseCache.Get(cacheKey); ok {
+	cached, ok, err := responseCache.Get(cacheKey)
+	if err != nil {
+		log.Printf("cache get error: %v", err)
+	}
+	if ok {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(cached)
 		return
@@ -119,7 +138,9 @@ func FeedHandlerV2(w http.ResponseWriter, r *http.Request) {
 		feedItems = append(feedItems, item)
 	}
 
-	responseCache.Set(cacheKey, feedItems)
+	if err := responseCache.Set(cacheKey, feedItems); err != nil {
+		log.Printf("cache set error: %v", err)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(feedItems)
 }
@@ -142,7 +163,11 @@ func StoryDetailHandlerV2(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cacheKey := fmt.Sprintf("story_v2:%s:%s", collectionName, storyID)
-	if cached, ok := responseCache.Get(cacheKey); ok {
+	cached, ok, err := responseCache.Get(cacheKey)
+	if err != nil {
+		log.Printf("cache get error: %v", err)
+	}
+	if ok {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(cached)
 		return
@@ -172,7 +197,9 @@ func StoryDetailHandlerV2(w http.ResponseWriter, r *http.Request) {
 	story["id"] = story["_id"]
 	delete(story, "_id")
 
-	responseCache.Set(cacheKey, story)
+	if err := responseCache.Set(cacheKey, story); err != nil {
+		log.Printf("cache set error: %v", err)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(story)
 }
@@ -190,7 +217,11 @@ func StoryDetailHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cacheKey := fmt.Sprintf("story:%s", storyID)
-	if cached, ok := responseCache.Get(cacheKey); ok {
+	cached, ok, err := responseCache.Get(cacheKey)
+	if err != nil {
+		log.Printf("cache get error: %v", err)
+	}
+	if ok {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(cached)
 		return
@@ -220,7 +251,9 @@ func StoryDetailHandler(w http.ResponseWriter, r *http.Request) {
 	story["id"] = story["_id"]
 	delete(story, "_id")
 
-	responseCache.Set(cacheKey, story)
+	if err := responseCache.Set(cacheKey, story); err != nil {
+		log.Printf("cache set error: %v", err)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(story)
 }
