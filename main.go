@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 
 	"agent/db"
 	"agent/handlers"
@@ -30,12 +29,6 @@ func main() {
 		log.Fatal("Failed to connect to MongoDB:", err)
 	}
 	defer db.Close()
-
-	// Log the Gemini model being used
-	log.Printf("Using Gemini model: %s", os.Getenv("GEMINI_MODEL"))
-	if os.Getenv("GEMINI_MODEL") == "" {
-		log.Println("No GEMINI_MODEL specified, defaulting to gemini-2.5-flash")
-	}
 
 	// Create database indexes
 	db.CreateAgentIndexes()
