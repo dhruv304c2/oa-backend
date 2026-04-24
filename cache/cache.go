@@ -26,10 +26,13 @@ type Cache struct {
 
 func New(ttl time.Duration) (*Cache, error) {
 	address := os.Getenv("REDIS_URL")
+	opt, err := redis.ParseURL(address)
 
-	rdb := redis.NewClient(&redis.Options{
-		Addr: address,
-	})
+	if err != nil {
+		return nil, fmt.Errorf("invalid redis url: %w", err)
+	}
+
+	rdb := redis.NewClient(opt)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()

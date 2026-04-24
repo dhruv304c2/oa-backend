@@ -16,12 +16,13 @@ import (
 
 var responseCache *cache.Cache
 
-func init() {
+func InitCache() error {
 	var err error
 	responseCache, err = cache.New(2 * time.Minute)
 	if err != nil {
-		log.Fatalf("failed to initialize cache: %v", err)
+		return fmt.Errorf("failed to initialize cache: %w", err)
 	}
+	return nil
 }
 
 func FeedHandler(w http.ResponseWriter, r *http.Request) {

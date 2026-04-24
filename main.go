@@ -19,6 +19,11 @@ func main() {
 		log.Println("Warning: .env file not found, using environment variables")
 	}
 
+	// Initialize cache (Redis)
+	if err := handlers.InitCache(); err != nil {
+		log.Fatal("Failed to initialize cache:", err)
+	}
+
 	// Initialize MongoDB connection
 	err = db.InitMongoDB()
 	if err != nil {
