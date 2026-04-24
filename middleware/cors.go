@@ -31,7 +31,7 @@ func EnableCORS(next http.HandlerFunc) http.HandlerFunc {
 		// Check if the request origin is in the allowed list
 		allowed := false
 		for _, allowedOrigin := range allowedOrigins {
-			if origin == allowedOrigin {
+			if allowedOrigin == "*" || origin == allowedOrigin {
 				allowed = true
 				break
 			}
@@ -39,12 +39,6 @@ func EnableCORS(next http.HandlerFunc) http.HandlerFunc {
 
 		if allowed {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
-		} else if os.Getenv("CORS_ALLOW_ALL") == "true" {
-			// Optional: Allow all origins in development
-			w.Header().Set("Access-Control-Allow-Origin", "*")
-		} else {
-			// Don't set Access-Control-Allow-Origin header if origin not allowed
-			// This will cause CORS to block the request
 		}
 
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
